@@ -6,24 +6,32 @@
  * Map API
  *----------------------------------------------------------------------------*/
 
-/* A map is Redis implementation of sorted associative container which
+/* A map is Redis implementation of a sorted associative container which
  * uses two data structures to hold keys, values and scores in order to obtain
- * O(log(N)) INSERT and REMOVE operations and O(1) RETRIEVAL.
+ * O(log(N)) on INSERT and REMOVE operations and O(1) on RETRIEVAL via keys.
  *
- * Values are ordered with respect a score, same as zsets, but can be accessed
- * using keys, same as hashes.
+ * Values are ordered with respect to scores (double values) same as zsets,
+ * but are accessed using keys, same as hashes.
  * The values are added to an hash table mapping Redis objects to keys.
  * At the same time the keys are added to a skip list to maintain
- * sorting with respect a score.
+ * sorting with respect scores.
  *
  * The api looks like the hash api, implementation is almost equivalent to
  * the zset container. */
+
+
+/*
+ * Added 2 new objects:
+ *
+ * #define REDIS_MAP 5				-->		map
+ * #define REDIS_SCORE_VALUE 6 		-->		mapValue
+ */
 
 /*-----------------------------------------------------------------------------
  * Map commands
  *----------------------------------------------------------------------------*/
 
-void mlenCommand(redisClient *c) {
+void tlenCommand(redisClient *c) {
     robj *o;
     map *zs;
 
@@ -34,7 +42,20 @@ void mlenCommand(redisClient *c) {
     addReplyLongLong(c,zs->zsl->length);
 }
 
-void maddCommand(redisClient *c) {
+void tgetCommand(redisClient *c) {
+	robj *o, *value;
+	if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.nullbulk)) == NULL ||
+		checkType(c,o,REDIS_MAP)) return;
+
+	if ((value = mapTypeGet(o,c->argv[2])) != NULL) {
+		addReplyBulk(c,value);
+		decrRefCount(value);
+	} else {
+		addReply(c,shared.nullbulk);
+	}
+}
+
+void taddCommand(redisClient *c) {
 	int i;
 	double scoreval;
 	robj *o;
@@ -62,7 +83,7 @@ void maddCommand(redisClient *c) {
 	for (i = 2; i < c->argc; i += 3) {
 		if(getDoubleFromObjectOrReply(c,c->argv[i],&scoreval,NULL) != REDIS_OK) return;
 		hashTypeTryObjectEncoding(o,&c->argv[i+1], &c->argv[i+2]);
-	    mapTypeSet(o,scoreval,c->argv[i],c->argv[i+1]);
+	    mapTypeSet(o,scoreval,c->argv[i+1],c->argv[i+2]);
 	}
 	addReply(c, shared.ok);
 	touchWatchedKey(c->db,c->argv[1]);
@@ -89,9 +110,19 @@ robj *mapTypeLookupWriteOrCreate(redisClient *c, robj *key) {
 }
 
 
-/*-----------------------------------------------------------------------------
- * Sorted set commands
- *----------------------------------------------------------------------------*/
+/* Get the value from a hash identified by key. Returns either a string
+ * object or NULL if the value cannot be found. The refcount of the object
+ * is always increased by 1 when the value was found. */
+robj *mapTypeGet(robj *o, robj *key) {
+    robj *value = NULL;
+    map *mp = o->ptr;
+	dictEntry *de = dictFind(mp->dict,key);
+	if (de != NULL) {
+		value = ((mapValue*)((robj*)dictGetEntryVal(de))->ptr)->value;
+		incrRefCount(value);
+	}
+    return value;
+}
 
 /* Add an element, discard the old if the key already exists.
  * Return 0 on insert and 1 on update. */

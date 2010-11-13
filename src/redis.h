@@ -70,7 +70,7 @@
 #define REDIS_ZSET 3
 #define REDIS_HASH 4
 #define REDIS_MAP 5
-#define REDIS_SCORE_VALUE 16
+#define REDIS_SCORE_VALUE 6
 #define REDIS_VMPOINTER 8
 
 /* Objects encoding. Some kind of objects like Strings and Hashes can be
@@ -712,6 +712,8 @@ void freeListObject(robj *o);
 void freeSetObject(robj *o);
 void freeZsetObject(robj *o);
 void freeHashObject(robj *o);
+void freeMapObject(robj *o);
+void freeMapValueObject(robj *o);
 robj *createObject(int type, void *ptr);
 robj *createStringObject(char *ptr, size_t len);
 robj *dupStringObject(robj *o);
@@ -874,6 +876,7 @@ robj *hashTypeLookupWriteOrCreate(redisClient *c, robj *key);
 
 /* Map data type */
 int mapTypeSet(robj *o, double score, robj *key, robj *value);
+robj *mapTypeGet(robj *o, robj *key);
 robj *mapTypeLookupWriteOrCreate(redisClient *c, robj *key);
 
 /* Pub / Sub */
@@ -1040,8 +1043,9 @@ void punsubscribeCommand(redisClient *c);
 void publishCommand(redisClient *c);
 void watchCommand(redisClient *c);
 void unwatchCommand(redisClient *c);
-void mlenCommand(redisClient *c);
-void maddCommand(redisClient *c);
+void tlenCommand(redisClient *c);
+void taddCommand(redisClient *c);
+void tgetCommand(redisClient *c);
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__ ((deprecated));
