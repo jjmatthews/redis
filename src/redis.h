@@ -879,7 +879,7 @@ int mapTypeSet(robj *o, double score, robj *key, robj *value);
 int mapTypeExists(robj *o, robj *key);
 robj *mapTypeGet(robj *o, robj *key);
 robj *mapTypeLookupWriteOrCreate(redisClient *c, robj *key);
-void trangeGenericCommand(redisClient *c, int reverse);
+void trangeGenericCommand(redisClient *c, int start, int end, int withvalues, int withscores, int reverse);
 
 /* Pub / Sub */
 int pubsubUnsubscribeAllChannels(redisClient *c, int notify);
@@ -1052,6 +1052,7 @@ void tgetCommand(redisClient *c);
 void theadCommand(redisClient *c);
 void ttailCommand(redisClient *c);
 void tkeysCommand(redisClient *c);
+void titemsCommand(redisClient *c);
 void trangeCommand(redisClient *c);
 
 #if defined(__GNUC__)

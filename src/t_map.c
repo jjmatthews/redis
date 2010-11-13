@@ -16,9 +16,8 @@
  * At the same time the keys are added to a skip list to maintain
  * sorting with respect scores.
  *
- * The api looks like the hash api, implementation is almost equivalent to
- * the zset container. */
-
+ * The api looks very much like the hash api, the implementation on the other end
+ * is almost equivalent to the zset container. */
 
 /*
  * Added 2 new objects:
@@ -35,6 +34,7 @@
  * texists	-->		check if key is in map
  * tget		-->		get value at key
  * tkeys	-->		ordered keys (from skiplist)
+ * titems	-->		ordered keys,value pair
  * thead	-->		head key
  * ttail	-->		tail key
  */
@@ -127,12 +127,45 @@ void ttailCommand(redisClient *c) {
 
 
 void tkeysCommand(redisClient *c) {
-	trangeGenericCommand(c,0);
+	trangeGenericCommand(c,0,-1,0,0,0);
+}
+
+
+void titemsCommand(redisClient *c) {
+	trangeGenericCommand(c,0,-1,1,0,0);
 }
 
 
 void trangeCommand(redisClient *c) {
-	trangeGenericCommand(c,0);
+	long start = 0;
+	long end = 0;
+	long withvalues = 0;
+	long withscores = 0;
+    if (c->argc >= 3) {
+    	if ((getLongFromObjectOrReply(c, c->argv[2], &start, NULL) != REDIS_OK) ||
+    		(getLongFromObjectOrReply(c, c->argv[3], &end, NULL) != REDIS_OK)) return;
+		if (c->argc == 5) {
+			if(!strcasecmp(c->argv[4]->ptr,"withscores")) {
+				withscores = 1;
+			}
+			else if(!strcasecmp(c->argv[4]->ptr,"withvalues")) {
+				withvalues = 1;
+			}
+			else if(!strcasecmp(c->argv[4]->ptr,"withall")) {
+				withvalues = 1;
+				withscores = 1;
+			}
+
+		} else if (c->argc >= 5) {
+			addReply(c,shared.syntaxerr);
+			return;
+		}
+    }
+    else {
+    	addReply(c,shared.syntaxerr);
+    	return;
+    }
+	trangeGenericCommand(c,start,end,withvalues,withscores,0);
 }
 
 
@@ -230,10 +263,8 @@ int mapTypeSet(robj *o, double score, robj *key, robj *value) {
 }
 
 
-void trangeGenericCommand(redisClient *c, int reverse) {
+void trangeGenericCommand(redisClient *c, int start, int end, int withvalues, int withscores, int reverse) {
     robj *o;
-    int withscores = 0;
-    int withvalues = 0;
     int llen;
     int rangelen, j;
     map *mp;
@@ -247,36 +278,9 @@ void trangeGenericCommand(redisClient *c, int reverse) {
 	zsl  = mp->zsl;
 	llen = zsl->length;
 
-    long start = 0;
-    long end = llen;
-
-    if (c->argc > 3) {
-    	if ((getLongFromObjectOrReply(c, c->argv[2], &start, NULL) != REDIS_OK) ||
-    		(getLongFromObjectOrReply(c, c->argv[3], &end, NULL) != REDIS_OK)) return;
-
-        /* convert negative indexes */
-        if (start < 0) start = llen+start;
-        if (end < 0) end = llen+end;
-        if (start < 0) start = 0;
-
-		if (c->argc == 5) {
-			if(!strcasecmp(c->argv[4]->ptr,"withscores")) {
-				withscores = 1;
-			}
-			else if(!strcasecmp(c->argv[4]->ptr,"withvalues")) {
-				withvalues = 1;
-			}
-			else if(!strcasecmp(c->argv[4]->ptr,"withall")) {
-				withvalues = 1;
-				withscores = 1;
-			}
-
-		} else if (c->argc >= 5) {
-			addReply(c,shared.syntaxerr);
-			return;
-		}
-
-    }
+	if (start < 0) start = llen+start;
+	if (end < 0) end = llen+end;
+	if (start < 0) start = 0;
 
     /* Invariant: start >= 0, so this test will be true when end < 0.
      * The range is empty when start > end or start >= length. */
