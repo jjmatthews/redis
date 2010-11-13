@@ -6,13 +6,16 @@
  * Map API
  *----------------------------------------------------------------------------*/
 
-/* A map is the an implementation of an sorted associative container
- * using two data structures to hold keys and values in order to obtain
+/* A map is Redis implementation of sorted associative container which
+ * uses two data structures to hold keys, values and scores in order to obtain
  * O(log(N)) INSERT and REMOVE operations and O(1) RETRIEVAL.
  *
+ * Values are ordered with respect a score, same as zsets, but can be accessed
+ * using keys, same as hashes.
  * The values are added to an hash table mapping Redis objects to keys.
- * At the same time the keys are added to a skip list to maintain key
- * sorting.
+ * At the same time the keys are added to a skip list to maintain
+ * sorting with respect a score.
+ *
  * The api looks like the hash api, implementation is almost equivalent to
  * the zset container. */
 
