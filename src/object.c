@@ -99,6 +99,26 @@ robj *createZsetObject(void) {
     return createObject(REDIS_ZSET,zs);
 }
 
+robj *createMapObject(void) {
+    map *zs = zmalloc(sizeof(*zs));
+
+    zs->dict = dictCreate(&zsetDictType,NULL);
+    zs->zsl = zslCreate();
+    return createObject(REDIS_MAP,zs);
+}
+
+robj *createMapValue(double score, robj *value) {
+    mapValue *val = zmalloc(sizeof(*val));
+
+    val->score = score;
+    val->value = value;
+    if(value)
+    	incrRefCount(value);
+    return createObject(REDIS_SCORE_VALUE,val);
+}
+
+
+
 void freeStringObject(robj *o) {
     if (o->encoding == REDIS_ENCODING_RAW) {
         sdsfree(o->ptr);

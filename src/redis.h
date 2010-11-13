@@ -69,6 +69,8 @@
 #define REDIS_SET 2
 #define REDIS_ZSET 3
 #define REDIS_HASH 4
+#define REDIS_MAP 5
+#define REDIS_SCORE_VALUE 16
 #define REDIS_VMPOINTER 8
 /* Object types only used for persistence in .rdb files */
 #define REDIS_HASH_ZIPMAP 9
@@ -730,6 +732,8 @@ robj *createSetObject(void);
 robj *createIntsetObject(void);
 robj *createHashObject(void);
 robj *createZsetObject(void);
+robj *createMapObject(void);
+robj *createMapValue(double score, robj *value);
 int getLongFromObjectOrReply(redisClient *c, robj *o, long *target, const char *msg);
 int checkType(redisClient *c, robj *o, int type);
 int getLongLongFromObjectOrReply(redisClient *c, robj *o, long long *target, const char *msg);
@@ -874,6 +878,10 @@ int hashTypeNext(hashTypeIterator *hi);
 int hashTypeCurrent(hashTypeIterator *hi, int what, robj **objval, unsigned char **v, unsigned int *vlen);
 robj *hashTypeCurrentObject(hashTypeIterator *hi, int what);
 robj *hashTypeLookupWriteOrCreate(redisClient *c, robj *key);
+
+/* Map data type */
+int mapTypeSet(robj *o, double score, robj *key, robj *value);
+robj *mapTypeLookupWriteOrCreate(redisClient *c, robj *key);
 
 /* Pub / Sub */
 int pubsubUnsubscribeAllChannels(redisClient *c, int notify);
@@ -1039,6 +1047,7 @@ void punsubscribeCommand(redisClient *c);
 void publishCommand(redisClient *c);
 void watchCommand(redisClient *c);
 void unwatchCommand(redisClient *c);
+void maddCommand(redisClient *c);
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__ ((deprecated));

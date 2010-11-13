@@ -348,7 +348,7 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
  * Sorted set commands 
  *----------------------------------------------------------------------------*/
 
-/* This generic command implements both ZADD and ZINCRBY. */
+/* This generic command implements both MADD and MINCRBY. */
 void zaddGenericCommand(redisClient *c, robj *key, robj *ele, double score, int incr) {
     robj *zsetobj;
     zset *zs;
