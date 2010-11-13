@@ -1047,6 +1047,7 @@ void punsubscribeCommand(redisClient *c);
 void publishCommand(redisClient *c);
 void watchCommand(redisClient *c);
 void unwatchCommand(redisClient *c);
+void mlenCommand(redisClient *c);
 void maddCommand(redisClient *c);
 
 #if defined(__GNUC__)

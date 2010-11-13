@@ -23,6 +23,17 @@
  * Map commands
  *----------------------------------------------------------------------------*/
 
+void mlenCommand(redisClient *c) {
+    robj *o;
+    map *zs;
+
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
+        checkType(c,o,REDIS_MAP)) return;
+
+    zs = o->ptr;
+    addReplyLongLong(c,zs->zsl->length);
+}
+
 void maddCommand(redisClient *c) {
 	int i;
 	double scoreval;
