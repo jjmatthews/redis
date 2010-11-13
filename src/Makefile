@@ -97,6 +97,8 @@ t_hash.o: t_hash.c redis.h fmacros.h config.h ae.h sds.h dict.h adlist.h \
   zmalloc.h anet.h zipmap.h ziplist.h intset.h version.h
 t_list.o: t_list.c redis.h fmacros.h config.h ae.h sds.h dict.h adlist.h \
   zmalloc.h anet.h zipmap.h ziplist.h intset.h version.h
+t_map.o: t_map.c redis.h fmacros.h config.h ae.h sds.h dict.h adlist.h \
+ zmalloc.h anet.h zipmap.h ziplist.h intset.h version.h
 t_set.o: t_set.c redis.h fmacros.h config.h ae.h sds.h dict.h adlist.h \
   zmalloc.h anet.h zipmap.h ziplist.h intset.h version.h
 t_string.o: t_string.c redis.h fmacros.h config.h ae.h sds.h dict.h \
