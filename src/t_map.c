@@ -6,7 +6,7 @@
  * Map API
  *----------------------------------------------------------------------------*/
 
-/* A map is Redis implementation of a sorted associative container which
+/* A map is Redis implementation of a unique sorted associative container which
  * uses two data structures to hold keys, values and scores in order to obtain
  * O(log(N)) on INSERT and REMOVE operations and O(1) on RETRIEVAL via keys.
  *
@@ -27,19 +27,37 @@
  * #define REDIS_SCORE_VALUE 6 		-->		mapValue
  */
 
+/*
+ * Commands:
+ *
+ * tlen		-->		size of map
+ * tadd		-->		add items
+ * texists	-->		check if key is in map
+ * tget		-->		get value at key
+ */
+
 /*-----------------------------------------------------------------------------
  * Map commands
  *----------------------------------------------------------------------------*/
 
 void tlenCommand(redisClient *c) {
     robj *o;
-    map *zs;
+    map *mp;
 
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,o,REDIS_MAP)) return;
 
-    zs = o->ptr;
-    addReplyLongLong(c,zs->zsl->length);
+    mp = o->ptr;
+    addReplyLongLong(c,mp->zsl->length);
+}
+
+void texistsCommand(redisClient *c) {
+    robj *o;
+
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
+        checkType(c,o,REDIS_MAP)) return;
+
+    addReply(c, mapTypeExists(o,c->argv[2]) ? shared.cone : shared.czero);
 }
 
 void tgetCommand(redisClient *c) {
@@ -61,23 +79,10 @@ void taddCommand(redisClient *c) {
 	robj *o;
 
 	if ((c->argc % 3) == 1) {
-		addReplyError(c,"wrong number of arguments for MADD");
+		addReplyError(c,"wrong number of arguments for TADD");
 		return;
 	}
 
-	/*
-	zsetobj = lookupKeyWrite(c->db,key);
-	    if (zsetobj == NULL) {
-	        zsetobj = createZsetObject();
-	        dbAdd(c->db,key,zsetobj);
-	    } else {
-	        if (zsetobj->type != REDIS_ZSET) {
-	            addReply(c,shared.wrongtypeerr);
-	            return;
-	        }
-	    }
-	    zs = zsetobj->ptr;
-	    */
 	if ((o = mapTypeLookupWriteOrCreate(c,c->argv[1])) == NULL) return;
 	hashTypeTryConversion(o,c->argv,2,c->argc-1);
 	for (i = 2; i < c->argc; i += 3) {
@@ -107,6 +112,17 @@ robj *mapTypeLookupWriteOrCreate(redisClient *c, robj *key) {
         }
     }
     return o;
+}
+
+
+/* Test if the key exists in the given map. Returns 1 if the key
+ * exists and 0 when it doesn't. */
+int mapTypeExists(robj *o, robj *key) {
+	map *mp = o->ptr;
+    if (dictFind(mp->dict,key) != NULL) {
+    	return 1;
+    }
+    return 0;
 }
 
 

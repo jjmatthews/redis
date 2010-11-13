@@ -876,6 +876,7 @@ robj *hashTypeLookupWriteOrCreate(redisClient *c, robj *key);
 
 /* Map data type */
 int mapTypeSet(robj *o, double score, robj *key, robj *value);
+int mapTypeExists(robj *o, robj *key);
 robj *mapTypeGet(robj *o, robj *key);
 robj *mapTypeLookupWriteOrCreate(redisClient *c, robj *key);
 
@@ -1044,6 +1045,7 @@ void publishCommand(redisClient *c);
 void watchCommand(redisClient *c);
 void unwatchCommand(redisClient *c);
 void tlenCommand(redisClient *c);
+void texistsCommand(redisClient *c);
 void taddCommand(redisClient *c);
 void tgetCommand(redisClient *c);
 
