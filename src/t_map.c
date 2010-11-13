@@ -31,9 +31,12 @@
  * Commands:
  *
  * tlen		-->		size of map
- * tadd		-->		add items
+ * tadd		-->		add items as multiple of triplet (score,key,value)
  * texists	-->		check if key is in map
  * tget		-->		get value at key
+ * tkeys	-->		ordered keys (from skiplist)
+ * thead	-->		head key
+ * ttail	-->		tail key
  */
 
 /*-----------------------------------------------------------------------------
@@ -51,6 +54,7 @@ void tlenCommand(redisClient *c) {
     addReplyLongLong(c,mp->zsl->length);
 }
 
+
 void texistsCommand(redisClient *c) {
     robj *o;
 
@@ -59,6 +63,7 @@ void texistsCommand(redisClient *c) {
 
     addReply(c, mapTypeExists(o,c->argv[2]) ? shared.cone : shared.czero);
 }
+
 
 void tgetCommand(redisClient *c) {
 	robj *o, *value;
@@ -72,6 +77,7 @@ void tgetCommand(redisClient *c) {
 		addReply(c,shared.nullbulk);
 	}
 }
+
 
 void taddCommand(redisClient *c) {
 	int i;
@@ -93,6 +99,40 @@ void taddCommand(redisClient *c) {
 	addReply(c, shared.ok);
 	touchWatchedKey(c->db,c->argv[1]);
 	server.dirty++;
+}
+
+
+void theadCommand(redisClient *c) {
+	robj *o;
+	zskiplistNode *ln;
+
+	if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptymultibulk)) == NULL
+			|| checkType(c,o,REDIS_MAP)) return;
+	map *mp   = o->ptr;
+	ln = mp->zsl->header->level[0].forward;
+	addReplyBulk(c,ln->obj);
+}
+
+
+void ttailCommand(redisClient *c) {
+	robj *o;
+	zskiplistNode *ln;
+
+	if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptymultibulk)) == NULL
+			|| checkType(c,o,REDIS_MAP)) return;
+	map *mp   = o->ptr;
+	ln = mp->zsl->tail;
+	addReplyBulk(c,ln->obj);
+}
+
+
+void tkeysCommand(redisClient *c) {
+	trangeGenericCommand(c,0);
+}
+
+
+void trangeCommand(redisClient *c) {
+	trangeGenericCommand(c,0);
 }
 
 
@@ -173,6 +213,9 @@ int mapTypeSet(robj *o, double score, robj *key, robj *value) {
         redisAssert(de != NULL);
         ro = dictGetEntryVal(de);
         curobj = ro->ptr;
+        decrRefCount(curobj->value);
+        curobj->value = value;
+        incrRefCount(value);
 
         /* When the score is updated, reuse the existing string object to
          * prevent extra alloc/dealloc of strings on ZINCRBY. */
@@ -184,4 +227,84 @@ int mapTypeSet(robj *o, double score, robj *key, robj *value) {
         }
     }
     return update;
+}
+
+
+void trangeGenericCommand(redisClient *c, int reverse) {
+    robj *o;
+    int withscores = 0;
+    int withvalues = 0;
+    int llen;
+    int rangelen, j;
+    map *mp;
+    zskiplist *zsl;
+    zskiplistNode *ln;
+    robj *key;
+
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptymultibulk)) == NULL
+             || checkType(c,o,REDIS_MAP)) return;
+	mp   = o->ptr;
+	zsl  = mp->zsl;
+	llen = zsl->length;
+
+    long start = 0;
+    long end = llen;
+
+    if (c->argc > 3) {
+    	if ((getLongFromObjectOrReply(c, c->argv[2], &start, NULL) != REDIS_OK) ||
+    		(getLongFromObjectOrReply(c, c->argv[3], &end, NULL) != REDIS_OK)) return;
+
+        /* convert negative indexes */
+        if (start < 0) start = llen+start;
+        if (end < 0) end = llen+end;
+        if (start < 0) start = 0;
+
+		if (c->argc == 5) {
+			if(!strcasecmp(c->argv[4]->ptr,"withscores")) {
+				withscores = 1;
+			}
+			else if(!strcasecmp(c->argv[4]->ptr,"withvalues")) {
+				withvalues = 1;
+			}
+			else if(!strcasecmp(c->argv[4]->ptr,"withall")) {
+				withvalues = 1;
+				withscores = 1;
+			}
+
+		} else if (c->argc >= 5) {
+			addReply(c,shared.syntaxerr);
+			return;
+		}
+
+    }
+
+    /* Invariant: start >= 0, so this test will be true when end < 0.
+     * The range is empty when start > end or start >= length. */
+    if (start > end || start >= llen) {
+        addReply(c,shared.emptymultibulk);
+        return;
+    }
+    if (end >= llen) end = llen-1;
+    rangelen = (end-start)+1;
+
+    /* check if starting point is trivial, before searching
+     * the element in log(N) time */
+    if (reverse) {
+        ln = start == 0 ? zsl->tail : zslistTypeGetElementByRank(zsl, llen-start);
+    } else {
+        ln = start == 0 ?
+            zsl->header->level[0].forward : zslistTypeGetElementByRank(zsl, start+1);
+    }
+
+    /* Return the result in form of a multi-bulk reply */
+    addReplyMultiBulkLen(c,rangelen*(1+withscores+withvalues));
+    for (j = 0; j < rangelen; j++) {
+        key = ln->obj;
+        addReplyBulk(c,key);
+        if (withvalues)
+        	addReplyBulk(c,mapTypeGet(o,key));
+        if (withscores)
+            addReplyDouble(c,ln->score);
+        ln = reverse ? ln->backward : ln->level[0].forward;
+    }
 }
