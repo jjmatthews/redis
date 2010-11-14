@@ -138,6 +138,7 @@ proc execute_everything {} {
     execute_tests "unit/type/set"
     execute_tests "unit/type/zset"
     execute_tests "unit/type/hash"
+    execute_tests "unit/type/map"
     execute_tests "unit/sort"
     execute_tests "unit/expire"
     execute_tests "unit/other"

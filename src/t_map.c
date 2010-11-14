@@ -191,6 +191,10 @@ int mapTypeExists(robj *o, robj *key) {
 }
 
 
+mapValue* toMapType(void* o) {
+	return ((mapValue*)((robj*)o)->ptr);
+}
+
 /* Get the value from a hash identified by key. Returns either a string
  * object or NULL if the value cannot be found. The refcount of the object
  * is always increased by 1 when the value was found. */
@@ -199,7 +203,7 @@ robj *mapTypeGet(robj *o, robj *key) {
     map *mp = o->ptr;
 	dictEntry *de = dictFind(mp->dict,key);
 	if (de != NULL) {
-		value = ((mapValue*)((robj*)dictGetEntryVal(de))->ptr)->value;
+		value = toMapType(dictGetEntryVal(de))->value;
 		incrRefCount(value);
 	}
     return value;
