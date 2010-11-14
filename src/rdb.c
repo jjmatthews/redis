@@ -1,5 +1,6 @@
 #include "redis.h"
 #include "lzf.h"    /* LZF compression library */
+#include "t_map.h"
 
 #include <math.h>
 #include <sys/types.h>
@@ -379,6 +380,20 @@ int rdbSaveObject(FILE *fp, robj *o) {
             }
             dictReleaseIterator(di);
         }
+    } else if (o->type == REDIS_MAP) {
+    	map *mp = o->ptr;
+    	dictIterator *di = dictGetIterator(mp->dict);
+    	dictEntry *de;
+
+    	if (rdbSaveLen(fp,dictSize(mp->dict)) == -1) return -1;
+    	while((de = dictNext(di)) != NULL) {
+			robj *key = dictGetEntryKey(de);
+			mapValue *val = toMapType(dictGetEntryVal(de));
+			if (rdbSaveStringObject(fp,key) == -1) return -1;
+			if (rdbSaveStringObject(fp,val->value) == -1) return -1;
+			if (rdbSaveDoubleValue(fp,val->score) == -1) return -1;
+		}
+		dictReleaseIterator(di);
     } else {
         redisPanic("Unknown object type");
     }
@@ -832,6 +847,21 @@ robj *rdbLoadObject(int type, FILE *fp) {
                 dictAdd((dict*)o->ptr,key,val);
             }
         }
+    } else if (type == REDIS_MAP) {
+    	size_t zsetlen;
+    	robj *ele, *key;
+		double score;
+
+		if ((zsetlen = rdbLoadLen(fp,NULL)) == REDIS_RDB_LENERR) return NULL;
+		o = createMapObject();
+		while(zsetlen--) {
+			if ((key = rdbLoadEncodedStringObject(fp)) == NULL) return NULL;
+			key = tryObjectEncoding(key);
+			if ((ele = rdbLoadEncodedStringObject(fp)) == NULL) return NULL;
+			ele = tryObjectEncoding(ele);
+			if (rdbLoadDoubleValue(fp,&score) == -1) return NULL;
+			mapTypeSet(o, score, key, ele);
+		}
     } else {
         redisPanic("Unknown object type");
     }
