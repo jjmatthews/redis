@@ -1,4 +1,4 @@
-#include "redis.h"
+#include "t_map.h"
 
 #include <math.h>
 
@@ -29,14 +29,17 @@
 /*
  * Commands:
  *
- * tlen		-->		size of map
- * tadd		-->		add items as multiple of triplet (score,key,value)
- * texists	-->		check if key is in map
- * tget		-->		get value at key
- * tkeys	-->		ordered keys (from skiplist)
- * titems	-->		ordered keys,value pair
- * thead	-->		head key
- * ttail	-->		tail key
+ * tlen				-->		size of map
+ * tadd				-->		add items as multiple of triplet (score,key,value)
+ * texists			-->		check if key is in map
+ * tget				-->		get value at key
+ * thead			-->		head key
+ * ttail			-->		tail key
+ * tkeys			-->		ordered keys (from skiplist)
+ * titems			-->		ordered keys,value pair
+ * trange			-->		range by rank in skiplist
+ * trangebyscore	-->		range by score in skiplist
+ * tcount			-->		count element in range (by score obviously)
  */
 
 /*-----------------------------------------------------------------------------
@@ -132,46 +135,35 @@ void tkeysCommand(redisClient *c) {
 
 
 void titemsCommand(redisClient *c) {
-	trangeGenericCommand(c,0,-1,1,0,0);
+	trangeGenericCommand(c,0,-1,0,1,0);
 }
 
 
 void trangeCommand(redisClient *c) {
 	long start = 0;
 	long end = 0;
-	long withvalues = 0;
-	long withscores = 0;
-    if (c->argc >= 3) {
-    	if ((getLongFromObjectOrReply(c, c->argv[2], &start, NULL) != REDIS_OK) ||
-    		(getLongFromObjectOrReply(c, c->argv[3], &end, NULL) != REDIS_OK)) return;
-		if (c->argc == 5) {
-			if(!strcasecmp(c->argv[4]->ptr,"withscores")) {
-				withscores = 1;
-			}
-			else if(!strcasecmp(c->argv[4]->ptr,"withvalues")) {
-				withvalues = 1;
-			}
-			else if(!strcasecmp(c->argv[4]->ptr,"withall")) {
-				withvalues = 1;
-				withscores = 1;
-			}
+	int withvalues = 0;
+	int withscores = 0;
+	if ((getLongFromObjectOrReply(c, c->argv[2], &start, NULL) != REDIS_OK) ||
+		(getLongFromObjectOrReply(c, c->argv[3], &end, NULL) != REDIS_OK)) return;
+	trangeRemaining(c,&withscores,&withvalues);
+	trangeGenericCommand(c,start,end,withscores,withvalues,0);
+}
 
-		} else if (c->argc >= 5) {
-			addReply(c,shared.syntaxerr);
-			return;
-		}
-    }
-    else {
-    	addReply(c,shared.syntaxerr);
-    	return;
-    }
-	trangeGenericCommand(c,start,end,withvalues,withscores,0);
+
+void trangebyscoreCommand(redisClient *c) {
+	trangebyscoreGenericCommand(c,0,0);
+}
+
+void tcountCommand(redisClient *c) {
+	trangebyscoreGenericCommand(c,0,1);
 }
 
 
 /*-----------------------------------------------------------------------------
  * Internals
  *----------------------------------------------------------------------------*/
+
 
 robj *mapTypeLookupWriteOrCreate(redisClient *c, robj *key) {
     robj *o = lookupKeyWrite(c->db,key);
@@ -263,7 +255,30 @@ int mapTypeSet(robj *o, double score, robj *key, robj *value) {
 }
 
 
-void trangeGenericCommand(redisClient *c, int start, int end, int withvalues, int withscores, int reverse) {
+void trangeRemaining(redisClient *c, int *withscores, int *withvalues) {
+	/* Parse optional extra arguments. Note that ZCOUNT will exactly have
+		 * 4 arguments, so we'll never enter the following code path. */
+	if (c->argc > 4) {
+		int remaining = c->argc - 4;
+		int pos = 4;
+
+		while (remaining) {
+			if (remaining >= 1 && !strcasecmp(c->argv[pos]->ptr,"withscores")) {
+				pos++; remaining--;
+				*withscores = 1;
+			} else if (remaining >= 1 && !strcasecmp(c->argv[pos]->ptr,"withvalues")) {
+				pos++; remaining--;
+				*withvalues = 1;
+			} else {
+				addReply(c,shared.syntaxerr);
+				return;
+			}
+		}
+	}
+}
+
+
+void trangeGenericCommand(redisClient *c, int start, int end, int withscores, int withvalues, int reverse) {
     robj *o;
     int llen;
     int rangelen, j;
@@ -311,4 +326,81 @@ void trangeGenericCommand(redisClient *c, int start, int end, int withvalues, in
             addReplyDouble(c,ln->score);
         ln = reverse ? ln->backward : ln->level[0].forward;
     }
+}
+
+
+
+void trangebyscoreGenericCommand(redisClient *c, int reverse, int justcount) {
+	/* No reverse implementation for now */
+	zrangespec range;
+	map *mp;
+	zskiplist *zsl;
+	zskiplistNode *ln;
+	robj *o, *key, *emptyreply;
+	int withvalues = 0;
+	int withscores = 0;
+	unsigned long rangelen = 0;
+	void *replylen = NULL;
+
+	/* Parse the range arguments. */
+	if (zslParseRange(c->argv[2],c->argv[3],&range) != REDIS_OK) {
+		addReplyError(c,"min or max is not a double");
+		return;
+	}
+	trangeRemaining(c,&withvalues,&withvalues);
+
+	/* Ok, lookup the key and get the range */
+	emptyreply = justcount ? shared.czero : shared.emptymultibulk;
+	if ((o = lookupKeyReadOrReply(c,c->argv[1],emptyreply)) == NULL ||
+		checkType(c,o,REDIS_MAP)) return;
+
+	mp  = o->ptr;
+	zsl = mp->zsl;
+
+	/* If reversed, assume the elements are sorted from high to low score. */
+	ln = zslFirstWithScore(zsl,range.min);
+
+	/* No "first" element in the specified interval. */
+	if (ln == NULL) {
+		addReply(c,emptyreply);
+		return;
+	}
+
+	/* We don't know in advance how many matching elements there
+	 * are in the list, so we push this object that will represent
+	 * the multi-bulk length in the output buffer, and will "fix"
+	 * it later */
+	if (!justcount)
+		replylen = addDeferredMultiBulkLength(c);
+
+
+	while (ln) {
+		/* Check if this this element is in range. */
+		if (range.maxex) {
+			/* Element should have score < range.max */
+			if (ln->score >= range.max) break;
+		} else {
+			/* Element should have score <= range.max */
+			if (ln->score > range.max) break;
+		}
+
+		/* Do our magic */
+		rangelen++;
+		if (!justcount) {
+			key = ln->obj;
+			addReplyBulk(c,key);
+			if (withvalues)
+				addReplyBulk(c,mapTypeGet(o,key));
+			if (withscores)
+				addReplyDouble(c,ln->score);
+		}
+
+		ln = ln->level[0].forward;
+	}
+
+	if (justcount) {
+		addReplyLongLong(c,(long)rangelen);
+	} else {
+		setDeferredMultiBulkLength(c, replylen, rangelen*(1+withscores+withvalues));
+	}
 }
