@@ -164,6 +164,23 @@ void tcountCommand(redisClient *c) {
  * Internals
  *----------------------------------------------------------------------------*/
 
+robj *createMapObject(void) {
+    map *zs = zmalloc(sizeof(*zs));
+
+    zs->dict = dictCreate(&zsetDictType,NULL);
+    zs->zsl = zslCreate();
+    return createObject(REDIS_MAP,zs);
+}
+
+robj *createMapValue(double score, robj *value) {
+    mapValue *val = zmalloc(sizeof(*val));
+
+    val->score = score;
+    val->value = value;
+    if(value)
+    	incrRefCount(value);
+    return createObject(REDIS_SCORE_VALUE,val);
+}
 
 robj *mapTypeLookupWriteOrCreate(redisClient *c, robj *key) {
     robj *o = lookupKeyWrite(c->db,key);
