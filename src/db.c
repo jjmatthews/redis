@@ -375,6 +375,7 @@ void typeCommand(redisClient *c) {
         case REDIS_SET: type = "set"; break;
         case REDIS_ZSET: type = "zset"; break;
         case REDIS_HASH: type = "hash"; break;
+        case REDIS_MAP: type = "map"; break;
         default: type = "unknown"; break;
         }
     }
