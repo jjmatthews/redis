@@ -28,6 +28,7 @@
  */
 
 #include "redis.h"
+#include "t_map.h"
 
 #ifdef HAVE_BACKTRACE
 #include <execinfo.h>

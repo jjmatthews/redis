@@ -174,12 +174,6 @@ int zslDelete(zskiplist *zsl, double score, robj *obj) {
     return 0; /* not found */
 }
 
-/* Struct to hold a inclusive/exclusive range spec. */
-typedef struct {
-    double min, max;
-    int minex, maxex; /* are min or max exclusive? */
-} zrangespec;
-
 /* Delete all the elements with score between min and max from the skiplist.
  * Min and mx are inclusive, so a score >= min || score <= max is deleted.
  * Note that this function takes the reference to the hash table view of the
@@ -307,7 +301,7 @@ zskiplistNode* zslistTypeGetElementByRank(zskiplist *zsl, unsigned long rank) {
 }
 
 /* Populate the rangespec according to the objects min and max. */
-static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
+int zslParseRange(robj *min, robj *max, zrangespec *spec) {
     char *eptr;
     spec->minex = spec->maxex = 0;
 
