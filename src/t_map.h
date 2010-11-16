@@ -29,7 +29,7 @@ void tcountCommand(redisClient *c);
 
 
 /* Map internals */
-mapValue* toMapType(void* o);
+robj *createMapObject(void);
 int mapTypeSet(robj *o, double score, robj *key, robj *value);
 int mapTypeExists(robj *o, robj *key);
 robj *mapTypeGet(robj *o, robj *key);
