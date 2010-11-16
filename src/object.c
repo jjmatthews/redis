@@ -139,21 +139,6 @@ void freeZsetObject(robj *o) {
     zfree(zs);
 }
 
-void freeMapObject(robj *o) {
-    map *mp = o->ptr;
-
-    dictRelease(mp->dict);
-    zslFree(mp->zsl);
-    zfree(mp);
-}
-
-void freeMapValueObject(robj *o) {
-    mapValue *mv = o->ptr;
-
-    zfree(mv->value);
-    zfree(mv);
-}
-
 void freeHashObject(robj *o) {
     switch (o->encoding) {
     case REDIS_ENCODING_HT:
@@ -183,8 +168,7 @@ void decrRefCount(void *obj) {
         case REDIS_SET: freeSetObject(o); break;
         case REDIS_ZSET: freeZsetObject(o); break;
         case REDIS_HASH: freeHashObject(o); break;
-        case REDIS_MAP: freeMapObject(o); break;
-        case REDIS_SCORE_VALUE: freeMapValueObject(o); break;
+        case REDIS_MAP: freeZsetObject(o); break;
         default: redisPanic("Unknown object type"); break;
         }
         o->ptr = NULL; /* defensive programming. We'll see NULL in traces. */

@@ -347,17 +347,16 @@ int rdbSaveObject(FILE *fp, robj *o) {
             dictReleaseIterator(di);
         }
     } else if (o->type == REDIS_MAP) {
-    	map *mp = o->ptr;
+    	zset *mp = o->ptr;
     	dictIterator *di = dictGetIterator(mp->dict);
     	dictEntry *de;
 
     	if (rdbSaveLen(fp,dictSize(mp->dict)) == -1) return -1;
     	while((de = dictNext(di)) != NULL) {
-			robj *key = dictGetEntryKey(de);
-			mapValue *val = toMapType(dictGetEntryVal(de));
-			if (rdbSaveStringObject(fp,key) == -1) return -1;
-			if (rdbSaveStringObject(fp,val->value) == -1) return -1;
-			if (rdbSaveDoubleValue(fp,val->score) == -1) return -1;
+    		double *score = dictGetEntryKey(de);
+    		robj *eleobj = dictGetEntryVal(de);
+    		if (rdbSaveStringObject(fp,eleobj) == -1) return -1;
+    		if (rdbSaveDoubleValue(fp,*score) == -1) return -1;
 		}
 		dictReleaseIterator(di);
     } else {

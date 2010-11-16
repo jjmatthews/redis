@@ -48,7 +48,7 @@
 
 void tlenCommand(redisClient *c) {
     robj *o;
-    map *mp;
+    zset *mp;
 
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,o,REDIS_MAP)) return;
@@ -111,7 +111,7 @@ void theadCommand(redisClient *c) {
 
 	if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptymultibulk)) == NULL
 			|| checkType(c,o,REDIS_MAP)) return;
-	map *mp   = o->ptr;
+	zset *mp   = o->ptr;
 	ln = mp->zsl->header->level[0].forward;
 	addReplyBulk(c,ln->obj);
 }
@@ -123,7 +123,7 @@ void ttailCommand(redisClient *c) {
 
 	if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptymultibulk)) == NULL
 			|| checkType(c,o,REDIS_MAP)) return;
-	map *mp   = o->ptr;
+	zset *mp   = o->ptr;
 	ln = mp->zsl->tail;
 	addReplyBulk(c,ln->obj);
 }
@@ -165,22 +165,13 @@ void tcountCommand(redisClient *c) {
  *----------------------------------------------------------------------------*/
 
 robj *createMapObject(void) {
-    map *zs = zmalloc(sizeof(*zs));
+	zset *zs = zmalloc(sizeof(*zs));
 
     zs->dict = dictCreate(&zsetDictType,NULL);
     zs->zsl = zslCreate();
     return createObject(REDIS_MAP,zs);
 }
 
-robj *createMapValue(double score, robj *value) {
-    mapValue *val = zmalloc(sizeof(*val));
-
-    val->score = score;
-    val->value = value;
-    if(value)
-    	incrRefCount(value);
-    return createObject(REDIS_SCORE_VALUE,val);
-}
 
 robj *mapTypeLookupWriteOrCreate(redisClient *c, robj *key) {
     robj *o = lookupKeyWrite(c->db,key);
@@ -200,7 +191,7 @@ robj *mapTypeLookupWriteOrCreate(redisClient *c, robj *key) {
 /* Test if the key exists in the given map. Returns 1 if the key
  * exists and 0 when it doesn't. */
 int mapTypeExists(robj *o, robj *key) {
-	map *mp = o->ptr;
+	zset *mp = o->ptr;
     if (dictFind(mp->dict,key) != NULL) {
     	return 1;
     }
@@ -208,19 +199,15 @@ int mapTypeExists(robj *o, robj *key) {
 }
 
 
-mapValue* toMapType(void* o) {
-	return ((mapValue*)((robj*)o)->ptr);
-}
-
 /* Get the value from a hash identified by key. Returns either a string
  * object or NULL if the value cannot be found. The refcount of the object
  * is always increased by 1 when the value was found. */
-robj *mapTypeGet(robj *o, robj *key) {
+robj *mapTypeGet(robj *o, robj *score) {
     robj *value = NULL;
-    map *mp = o->ptr;
-	dictEntry *de = dictFind(mp->dict,key);
+    zset *mp = o->ptr;
+	dictEntry *de = dictFind(mp->dict,score);
 	if (de != NULL) {
-		value = toMapType(dictGetEntryVal(de))->value;
+		value = dictGetEntryVal(de);
 		incrRefCount(value);
 	}
     return value;
@@ -228,49 +215,38 @@ robj *mapTypeGet(robj *o, robj *key) {
 
 /* Add an element, discard the old if the key already exists.
  * Return 0 on insert and 1 on update. */
-int mapTypeSet(robj *o, double score, robj *key, robj *value) {
+int mapTypeSet(robj *o, double score, robj *value) {
 	int update = 0;
     robj *ro;
     dictEntry *de;
-    map *mp;
+    zset *mp;
     zskiplistNode *znode;
     mp = o->ptr;
 
-    /* We need to remove and re-insert the element when it was already present
-     * in the dictionary, to update the skiplist. Note that we delay adding a
-     * pointer to the score because we want to reference the score in the
-     * skiplist node. */
-    if (dictAdd(mp->dict,key,NULL) == DICT_OK) {
+    de = dictFind(mp->dict,score);
+    if(redisAssert(de != NULL)) {
+    	// score is available. Get the element in skiplist
+    	ln = zslFirstWithScore(mp->zsl,score);
+    	redisAssert(ln != NULL);
+    	// Update the member in the hash
+    	ro = dictGetEntryVal(de);
+    	decrRefCount(ro);
+    	dictGetEntryVal(de) = value;
+    	incrRefCount(value); /* for dict */
+    	//Update member in skiplist
+    	ro = ln->obj;
+    	decrRefCount(ro);
+    	ln->obj = member;
+    	incrRefCount(value); /* for dict */
+    } else {
     	/* New element */
-        incrRefCount(key); /* added to hash */
-        znode = zslInsert(mp->zsl,score,key);
-        incrRefCount(key); /* added to skiplist */
+        znode = zslInsert(mp->zsl,score,value);
+        incrRefCount(value); /* added to skiplist */
 
         /* Update the score in the dict entry */
-        de = dictFind(mp->dict,key);
-        redisAssert(de != NULL);
-        dictGetEntryVal(de) = createMapValue(score,value);
+        dictAdd(mp->dict,score,member);
+        incrRefCount(value); /* added to hash */
         update = 1;
-    } else {
-    	mapValue *curobj;
-
-        /* Update score */
-        de = dictFind(mp->dict,key);
-        redisAssert(de != NULL);
-        ro = dictGetEntryVal(de);
-        curobj = ro->ptr;
-        decrRefCount(curobj->value);
-        curobj->value = value;
-        incrRefCount(value);
-
-        /* When the score is updated, reuse the existing string object to
-         * prevent extra alloc/dealloc of strings on ZINCRBY. */
-        if (score != curobj->score) {
-            redisAssert(zslDelete(mp->zsl,curobj->score,key));
-            znode = zslInsert(mp->zsl,score,key);
-            curobj->score = score;
-            update = 1;
-        }
     }
     return update;
 }
