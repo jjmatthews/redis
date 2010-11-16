@@ -70,7 +70,6 @@
 #define REDIS_ZSET 3
 #define REDIS_HASH 4
 #define REDIS_MAP 5
-#define REDIS_SCORE_VALUE 6
 #define REDIS_VMPOINTER 8
 
 /* Objects encoding. Some kind of objects like Strings and Hashes can be
