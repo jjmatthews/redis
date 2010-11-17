@@ -87,17 +87,16 @@ void taddCommand(redisClient *c) {
 	double scoreval;
 	robj *o;
 
-	if ((c->argc % 3) == 1) {
+	if ((c->argc % 2) == 1) {
 		addReplyError(c,"wrong number of arguments for TADD");
 		return;
 	}
 
 	if ((o = mapTypeLookupWriteOrCreate(c,c->argv[1])) == NULL) return;
 	hashTypeTryConversion(o,c->argv,2,c->argc-1);
-	for (i = 2; i < c->argc; i += 3) {
+	for (i = 2; i < c->argc; i += 2) {
 		if(getDoubleFromObjectOrReply(c,c->argv[i],&scoreval,NULL) != REDIS_OK) return;
-		hashTypeTryObjectEncoding(o,&c->argv[i+1], &c->argv[i+2]);
-	    mapTypeSet(o,scoreval,c->argv[i+1],c->argv[i+2]);
+	    mapTypeSet(o,scoreval,c->argv[i],c->argv[i+1]);
 	}
 	addReply(c, shared.ok);
 	touchWatchedKey(c->db,c->argv[1]);
@@ -129,20 +128,10 @@ void ttailCommand(redisClient *c) {
 }
 
 
-void tkeysCommand(redisClient *c) {
-	trangeGenericCommand(c,0,-1,0,0,0);
-}
-
-
-void titemsCommand(redisClient *c) {
-	trangeGenericCommand(c,0,-1,0,1,0);
-}
-
-
 void trangeCommand(redisClient *c) {
 	long start = 0;
 	long end = 0;
-	int withvalues = 0;
+	int withvalues = 1;
 	int withscores = 0;
 	if ((getLongFromObjectOrReply(c, c->argv[2], &start, NULL) != REDIS_OK) ||
 		(getLongFromObjectOrReply(c, c->argv[3], &end, NULL) != REDIS_OK)) return;
@@ -190,9 +179,9 @@ robj *mapTypeLookupWriteOrCreate(redisClient *c, robj *key) {
 
 /* Test if the key exists in the given map. Returns 1 if the key
  * exists and 0 when it doesn't. */
-int mapTypeExists(robj *o, robj *key) {
+int mapTypeExists(robj *o, robj *score) {
 	zset *mp = o->ptr;
-    if (dictFind(mp->dict,key) != NULL) {
+    if (dictFind(mp->dict,score) != NULL) {
     	return 1;
     }
     return 0;
@@ -215,36 +204,41 @@ robj *mapTypeGet(robj *o, robj *score) {
 
 /* Add an element, discard the old if the key already exists.
  * Return 0 on insert and 1 on update. */
-int mapTypeSet(robj *o, double score, robj *value) {
+int mapTypeSet(robj *o, double scoreval, robj *score, robj *value) {
 	int update = 0;
     robj *ro;
     dictEntry *de;
     zset *mp;
-    zskiplistNode *znode;
+    zskiplistNode *ln;
     mp = o->ptr;
 
     de = dictFind(mp->dict,score);
-    if(redisAssert(de != NULL)) {
-    	// score is available. Get the element in skiplist
-    	ln = zslFirstWithScore(mp->zsl,score);
+    if(de) {
+    	/* score is available.*/
+
+    	//Get the element in skiplist
+    	ln = zslFirstWithScore(mp->zsl,scoreval);
     	redisAssert(ln != NULL);
+
     	// Update the member in the hash
     	ro = dictGetEntryVal(de);
     	decrRefCount(ro);
     	dictGetEntryVal(de) = value;
     	incrRefCount(value); /* for dict */
+
     	//Update member in skiplist
     	ro = ln->obj;
     	decrRefCount(ro);
-    	ln->obj = member;
+    	ln->obj = value;
     	incrRefCount(value); /* for dict */
     } else {
     	/* New element */
-        znode = zslInsert(mp->zsl,score,value);
+        ln = zslInsert(mp->zsl,scoreval,value);
         incrRefCount(value); /* added to skiplist */
 
         /* Update the score in the dict entry */
-        dictAdd(mp->dict,score,member);
+        dictAdd(mp->dict,score,value);
+        incrRefCount(score); /* added to hash */
         incrRefCount(value); /* added to hash */
         update = 1;
     }
@@ -263,15 +257,18 @@ void trangeRemaining(redisClient *c, int *withscores, int *withvalues) {
 			if (remaining >= 1 && !strcasecmp(c->argv[pos]->ptr,"withscores")) {
 				pos++; remaining--;
 				*withscores = 1;
-			} else if (remaining >= 1 && !strcasecmp(c->argv[pos]->ptr,"withvalues")) {
+			} else if (remaining >= 1 && !strcasecmp(c->argv[pos]->ptr,"novalues")) {
 				pos++; remaining--;
-				*withvalues = 1;
+				*withvalues = 0;
+				*withscores = 1;
 			} else {
 				addReply(c,shared.syntaxerr);
 				return;
 			}
 		}
 	}
+	if(*withscores + *withvalues == 0)
+		*withvalues = 1;
 }
 
 
@@ -279,10 +276,10 @@ void trangeGenericCommand(redisClient *c, int start, int end, int withscores, in
     robj *o;
     int llen;
     int rangelen, j;
-    map *mp;
+    zset *mp;
     zskiplist *zsl;
     zskiplistNode *ln;
-    robj *key;
+    robj *value;
 
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptymultibulk)) == NULL
              || checkType(c,o,REDIS_MAP)) return;
@@ -313,14 +310,15 @@ void trangeGenericCommand(redisClient *c, int start, int end, int withscores, in
     }
 
     /* Return the result in form of a multi-bulk reply */
-    addReplyMultiBulkLen(c,rangelen*(1+withscores+withvalues));
+    addReplyMultiBulkLen(c,rangelen*(withscores+withvalues));
     for (j = 0; j < rangelen; j++) {
-        key = ln->obj;
-        addReplyBulk(c,key);
-        if (withvalues)
-        	addReplyBulk(c,mapTypeGet(o,key));
         if (withscores)
-            addReplyDouble(c,ln->score);
+        	addReplyDouble(c,ln->score);
+        if (withvalues) {
+        	value = ln->obj;
+        	incrRefCount(value);
+        	addReplyBulk(c,value);
+        }
         ln = reverse ? ln->backward : ln->level[0].forward;
     }
 }
@@ -330,11 +328,11 @@ void trangeGenericCommand(redisClient *c, int start, int end, int withscores, in
 void trangebyscoreGenericCommand(redisClient *c, int reverse, int justcount) {
 	/* No reverse implementation for now */
 	zrangespec range;
-	map *mp;
+	zset *mp;
 	zskiplist *zsl;
 	zskiplistNode *ln;
-	robj *o, *key, *emptyreply;
-	int withvalues = 0;
+	robj *o, *value, *emptyreply;
+	int withvalues = 1;
 	int withscores = 0;
 	unsigned long rangelen = 0;
 	void *replylen = NULL;
@@ -344,7 +342,7 @@ void trangebyscoreGenericCommand(redisClient *c, int reverse, int justcount) {
 		addReplyError(c,"min or max is not a double");
 		return;
 	}
-	trangeRemaining(c,&withvalues,&withvalues);
+	trangeRemaining(c,&withscores,&withvalues);
 
 	/* Ok, lookup the key and get the range */
 	emptyreply = justcount ? shared.czero : shared.emptymultibulk;
@@ -384,12 +382,13 @@ void trangebyscoreGenericCommand(redisClient *c, int reverse, int justcount) {
 		/* Do our magic */
 		rangelen++;
 		if (!justcount) {
-			key = ln->obj;
-			addReplyBulk(c,key);
-			if (withvalues)
-				addReplyBulk(c,mapTypeGet(o,key));
 			if (withscores)
 				addReplyDouble(c,ln->score);
+			if (withvalues) {
+				value = ln->obj;
+				incrRefCount(value);
+				addReplyBulk(c,value);
+			}
 		}
 
 		ln = ln->level[0].forward;
@@ -398,6 +397,6 @@ void trangebyscoreGenericCommand(redisClient *c, int reverse, int justcount) {
 	if (justcount) {
 		addReplyLongLong(c,(long)rangelen);
 	} else {
-		setDeferredMultiBulkLength(c, replylen, rangelen*(1+withscores+withvalues));
+		setDeferredMultiBulkLength(c, replylen, rangelen*(withscores+withvalues));
 	}
 }
