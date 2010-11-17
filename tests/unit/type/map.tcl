@@ -6,14 +6,14 @@ start_server {tags {"map"}} {
 	    }
     }
     test {MAP basic TADD and value update} {
-        r tadd mtmp 1 20010101 x
-        r tadd mtmp 2 20040101 y
-        r tadd mtmp 3 20070101 z
-        set aux1 [r titems mtmp]
-        r tadd mtmp 1 20010101 xy
-        set aux2 [r titems mtmp]
+        r tadd mtmp 1 x
+        r tadd mtmp 3 z
+        r tadd mtmp 2 y
+        set aux1 [r trange mtmp 0 -1 withscores]
+        r tadd mtmp 1 xy
+        set aux2 [r trange mtmp 0 -1 withscores]
         list $aux1 $aux2
-    } {{20010101 x 20040101 y 20070101 z} {20010101 xy 20040101 y 20070101 z}}
+    } {{1 x 2 y 3 z} {1 xy 2 y 3 z}}
 
     test {TLEN basics} {
         r tlen mtmp
