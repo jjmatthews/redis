@@ -729,6 +729,7 @@ int checkType(redisClient *c, robj *o, int type);
 int getLongLongFromObjectOrReply(redisClient *c, robj *o, long long *target, const char *msg);
 int getDoubleFromObjectOrReply(redisClient *c, robj *o, double *target, const char *msg);
 int getLongLongFromObject(robj *o, long long *target);
+int getDoubleFromObject(robj *o, double *target);
 char *strEncoding(int encoding);
 int compareStringObjects(robj *a, robj *b);
 int equalStringObjects(robj *a, robj *b);
@@ -787,6 +788,9 @@ zskiplist *zslCreate(void);
 void zslFree(zskiplist *zsl);
 zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj);
 int zslParseRange(robj *min, robj *max, zrangespec *spec);
+zskiplistNode *zslFirstWithScore(zskiplist *zsl, double score);
+zskiplistNode* zslistTypeGetElementByRank(zskiplist *zsl, unsigned long rank);
+
 
 /* Core functions */
 void freeMemoryIfNeeded(void);

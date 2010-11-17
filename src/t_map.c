@@ -27,7 +27,7 @@
  */
 
 /*
- * COMMANDS:
+ * 7 COMMANDS:
  *
  * TLEN
  * ------
@@ -61,8 +61,10 @@
  *
  * 		trange key start end <flag>
  *
- * Where start and end are integer following the same Redis conventions as zrange,
- * <flag> is an omptional string which can be "withscores" or "novalues"
+ * Where start and end are integers following the same
+ * Redis conventions as zrange, <flag> is an optional
+ * string which can take two values: "withscores" or "novalues"
+ *
  * 		trange key start end			-> return only values
  * 		trange key start end withscores	-> return score,value
  * 		trange key start end novalues	-> return score
