@@ -347,16 +347,17 @@ int rdbSaveObject(FILE *fp, robj *o) {
             dictReleaseIterator(di);
         }
     } else if (o->type == REDIS_MAP) {
+    	/* Save the map*/
     	zset *mp = o->ptr;
     	dictIterator *di = dictGetIterator(mp->dict);
     	dictEntry *de;
 
     	if (rdbSaveLen(fp,dictSize(mp->dict)) == -1) return -1;
     	while((de = dictNext(di)) != NULL) {
-    		double *score = dictGetEntryKey(de);
+    		robj *score  = dictGetEntryKey(de);
     		robj *eleobj = dictGetEntryVal(de);
     		if (rdbSaveStringObject(fp,eleobj) == -1) return -1;
-    		if (rdbSaveDoubleValue(fp,*score) == -1) return -1;
+    		if (rdbSaveStringObject(fp,score) == -1) return -1;
 		}
 		dictReleaseIterator(di);
     } else {
@@ -866,18 +867,18 @@ robj *rdbLoadObject(int type, FILE *fp) {
         }
     } else if (type == REDIS_MAP) {
     	size_t zsetlen;
-    	robj *ele, *key;
-		double score;
+    	robj *value, *score;
+		double scoreval;
 
 		if ((zsetlen = rdbLoadLen(fp,NULL)) == REDIS_RDB_LENERR) return NULL;
 		o = createMapObject();
 		while(zsetlen--) {
-			if ((key = rdbLoadEncodedStringObject(fp)) == NULL) return NULL;
-			key = tryObjectEncoding(key);
-			if ((ele = rdbLoadEncodedStringObject(fp)) == NULL) return NULL;
-			ele = tryObjectEncoding(ele);
-			if (rdbLoadDoubleValue(fp,&score) == -1) return NULL;
-			mapTypeSet(o, score, key, ele);
+			if ((value = rdbLoadEncodedStringObject(fp)) == NULL) return NULL;
+			value = tryObjectEncoding(value);
+			if ((score = rdbLoadEncodedStringObject(fp)) == NULL) return NULL;
+			score = tryObjectEncoding(score);
+			if( getDoubleFromObject(score, &scoreval) != REDIS_OK) return NULL;
+			mapTypeSet(o, scoreval, score, value);
 		}
     } else {
         redisPanic("Unknown object type");
