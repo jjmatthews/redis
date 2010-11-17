@@ -12,7 +12,7 @@
 
 
 /*
- * 11 MAP COMMANDS
+ * 7 MAP COMMANDS
  */
 void tlenCommand(redisClient *c);
 void texistsCommand(redisClient *c);
