@@ -7,40 +7,79 @@
  *----------------------------------------------------------------------------*/
 
 /* A map is Redis implementation of a unique sorted associative container which
- * uses two data structures to hold keys, values and scores in order to obtain
- * O(log(N)) on INSERT and REMOVE operations and O(1) on RETRIEVAL via keys.
+ * uses two data structures to hold scores and values in order to obtain
+ * O(log(N)) on INSERT and REMOVE operations and O(1) on RETRIEVAL via scores.
  *
  * Values are ordered with respect to scores (double values) same as zsets,
- * but are accessed using keys, same as hashes.
- * The values are added to an hash table mapping Redis objects to keys.
- * At the same time the keys are added to a skip list to maintain
+ * and can be accessed by score or rank.
+ * The values are added to an hash table mapping Redis objects to scores.
+ * At the same time the values are added to a skip list to maintain
  * sorting with respect scores.
  *
- * The api looks very much like the hash api, the implementation on the other end
- * is almost equivalent to the zset container. */
-
-/*
- * Added 2 new objects:
- *
- * #define REDIS_MAP 5				-->		map
- * #define REDIS_SCORE_VALUE 6 		-->		mapValue
+ * Implementation is almost equivalent to the zset container.
+ * The only caveat is the switching between scores and values in the hash table.
  */
 
 /*
- * Commands:
+ * Added 1 new objects:
  *
- * tlen				-->		size of map
- * tadd				-->		add items as multiple of triplet (score,key,value)
- * texists			-->		check if key is in map
- * tget				-->		get value at key
- * thead			-->		head key
- * ttail			-->		tail key
- * tkeys			-->		ordered keys (from skiplist)
- * titems			-->		ordered keys,value pair
- * trange			-->		range by rank in skiplist
- * trangebyscore	-->		range by score in skiplist
- * tcount			-->		count element in range (by score obviously)
+ * #define REDIS_MAP 5
  */
+
+/*
+ * COMMANDS:
+ *
+ * TLEN
+ * ------
+ * size of map
+ *
+ * 		tlen key
+ *
+ * TADD
+ * -----
+ * Add items to map
+ *
+ * 		tadd key score1 value1 score2 value2 ...
+ *
+ * If value at score is already available, the value will be updated
+ *
+ * TEXISTS
+ * ---------
+ * Check if score is in map
+ *
+ * 		texists key score
+ *
+ * TGET
+ * ------
+ * Get value at score
+ *
+ * 		tget key score
+ *
+ * TRANGE
+ * ----------
+ * Range by rank in skiplist
+ *
+ * 		trange key start end <flag>
+ *
+ * Where start and end are integer following the same Redis conventions as zrange,
+ * <flag> is an omptional string which can be "withscores" or "novalues"
+ * 		trange key start end			-> return only values
+ * 		trange key start end withscores	-> return score,value
+ * 		trange key start end novalues	-> return score
+ *
+ * TRANGEBYSCORE
+ * ------------------
+ * Range by score in skiplist
+ *
+ * 		trangebyscore score_start score_end <flag>
+ *
+ * TCOUNT
+ * -------------
+ * Count element in range by score
+ *
+ * 		tcount score_start,score_end
+ */
+
 
 /*-----------------------------------------------------------------------------
  * Map commands
