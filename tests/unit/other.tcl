@@ -9,8 +9,8 @@ start_server {tags {"other"}} {
         r zadd mytestzset 10 a
         r zadd mytestzset 20 b
         r zadd mytestzset 30 c
-	r tadd mytestmap 10 20100101 first
-	r tadd mytestmap 20 20100201 second
+	r tadd mytestmap 10 a
+	r tadd mytestmap 20 b
         r save
     } {OK}
 
