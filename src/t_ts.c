@@ -1,90 +1,10 @@
-#include "t_map.h"
+#include "t_ts.h"
 
 #include <math.h>
 
-/*-----------------------------------------------------------------------------
- * Map API
- *----------------------------------------------------------------------------*/
-
-/* A map is Redis implementation of a unique sorted associative container which
- * uses two data structures to hold scores and values in order to obtain
- * O(log(N)) on INSERT and REMOVE operations and O(1) on RETRIEVAL via scores.
- *
- * Values are ordered with respect to scores (double values) same as zsets,
- * and can be accessed by score or rank.
- * The values are added to an hash table mapping Redis objects to scores.
- * At the same time the values are added to a skip list to maintain
- * sorting with respect scores.
- *
- * Implementation is almost equivalent to the zset container.
- * The only caveat is the switching between scores and values in the hash table.
- */
-
-/*
- * Added 1 new objects:
- *
- * #define REDIS_MAP 5
- */
-
-/*
- * 7 COMMANDS:
- *
- * TLEN
- * ------
- * size of map
- *
- * 		tlen key
- *
- * TADD
- * -----
- * Add items to map
- *
- * 		tadd key score1 value1 score2 value2 ...
- *
- * If value at score is already available, the value will be updated
- *
- * TEXISTS
- * ---------
- * Check if score is in map
- *
- * 		texists key score
- *
- * TGET
- * ------
- * Get value at score
- *
- * 		tget key score
- *
- * TRANGE
- * ----------
- * Range by rank in skiplist
- *
- * 		trange key start end <flag>
- *
- * Where start and end are integers following the same
- * Redis conventions as zrange, <flag> is an optional
- * string which can take two values: "withscores" or "novalues"
- *
- * 		trange key start end			-> return only values
- * 		trange key start end withscores	-> return score,value
- * 		trange key start end novalues	-> return score
- *
- * TRANGEBYSCORE
- * ------------------
- * Range by score in skiplist
- *
- * 		trangebyscore score_start score_end <flag>
- *
- * TCOUNT
- * -------------
- * Count element in range by score
- *
- * 		tcount score_start,score_end
- */
-
 
 /*-----------------------------------------------------------------------------
- * Map commands
+ * timeseries commands
  *----------------------------------------------------------------------------*/
 
 void tlenCommand(redisClient *c) {

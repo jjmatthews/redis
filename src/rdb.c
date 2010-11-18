@@ -1,6 +1,6 @@
 #include "redis.h"
 #include "lzf.h"    /* LZF compression library */
-#include "t_map.h"
+#include "t_ts.h"
 
 #include <math.h>
 #include <sys/types.h>
