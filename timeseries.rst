@@ -21,7 +21,7 @@ uses two data structures to hold times and values in order to obtain
 O(log(N)) on INSERT and REMOVE operations and O(1) on RETRIEVAL via times.
 
  
-TLEN
+TSLEN
 ----------
 Size of timeserie
  
@@ -73,6 +73,22 @@ TSCOUNT
 Count element in range by score::
 
 	tcount score_start,score_end
+	
+	
+TSUNION
+-----------------------------------------
+**still to decide what form the value will take**
+Union ``N`` timeseries. If a series have missing times, ``NaN`` will be inserted::
+
+	TSUNION key1, key2, ..., keyN
+	
+	
+TSINTERCEPTION
+-----------------------------------------
+**still to decide what form the value will take**
+Merge ``N`` by performing an interception of times::
+
+	TSUNION key1, key2, ..., keyN
  
 
-__ redis: http://code.google.com/p/redis/
+.. _redis: http://code.google.com/p/redis/
