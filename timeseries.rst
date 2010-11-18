@@ -61,11 +61,11 @@ Range by rank in skiplist::
  
 Where start and end are integers following the same
 Redis conventions as zrange, <flag> is an optional
-string which can take two values: "withscores" or "novalues"
+string which can take two values: ``withtimes`` or ``novalues``.
  
-	trange key start end			-> return only values
-	trange key start end withscores	-> return score,value
-	trange key start end novalues	-> return score
+	trange key start end			-> return values
+	trange key start end withtimes	-> return (time,value)s
+	trange key start end novalues	-> return times
  
 TSRANGEBYTIME
 ------------------
