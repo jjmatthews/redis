@@ -17,65 +17,60 @@ sorting with respect times.
 Implementation is almost equivalent to zsets.
 The only caveat is the switching between scores(times) and members(values) in the hash table.
 Small difference, but an important one.
- 
-  Added 1 new objects:
- 
-  #define REDIS_MAP 5
- 
 
-/
-  7 COMMANDS:
  
-  TLEN
-  ------
-  size of timeserie
+TLEN
+===========
+Size of timeserie
  
   		tslen key
  
-  TSADD
-  -----
-  Add items to timeserie
+TSADD
+========
+Add items to timeserie::
+
+	tsadd key time1 value1 time2 value2 ...
  
-  		tsadd key time1 value1 time2 value2 ...
+If value at time is already available, the value will be updated
  
-  If value at time is already available, the value will be updated
- 
-  TSEXISTS
-  ----------
-  Check if time is in timeserie
+
+TSEXISTS
+===================
+Check if time is in timeserie
  
   		tsexists key time
  
-  TSGET
-  ------
-  Get value at time
+TSGET
+------
+Get value at time
+
+	tsget key score
  
-  		tsget key score
+TSRANGE
+=============
+Range by rank in skiplist::
+
+	trange key start end <flag>
  
-  TRANGE
-  ----------
-  Range by rank in skiplist
+Where start and end are integers following the same
+Redis conventions as zrange, <flag> is an optional
+string which can take two values: "withscores" or "novalues"
  
-  		trange key start end <flag>
+	trange key start end			-> return only values
+	trange key start end withscores	-> return score,value
+	trange key start end novalues	-> return score
  
-  Where start and end are integers following the same
-  Redis conventions as zrange, <flag> is an optional
-  string which can take two values: "withscores" or "novalues"
+TSRANGEBYTIME
+==================
+Range by times
  
-  		trange key start end			-> return only values
-  		trange key start end withscores	-> return score,value
-  		trange key start end novalues	-> return score
+	trangebyscore score_start score_end <flag>
  
-  TRANGEBYSCORE
-  ------------------
-  Range by score in skiplist
+TSCOUNT
+=============
+Count element in range by score::
+
+	tcount score_start,score_end
  
-  		trangebyscore score_start score_end <flag>
- 
-  TCOUNT
-  -------------
-  Count element in range by score
- 
-  		tcount score_start,score_end
- 
- _ redis: http://code.google.com/p/redis/
+
+_ redis: http://code.google.com/p/redis/
