@@ -4,12 +4,11 @@ Time Series API
 =============================
 
 This is a proposal implementation for a timeserie API in redis_.
-A timeseries is Redis implementation of a unique sorted associative container which
-uses two data structures to hold scores and values in order to obtain
-O(log(N)) on INSERT and REMOVE operations and O(1) on RETRIEVAL via scores.
 
-Values are ordered with respect to times (double values) same as zsets,
-and can be accessed by times or rank.
+Values, which can be anything you like, are ordered with respect to times (double values),
+and can be accessed by times or rank. Times are unique, that is to say in a timeserie
+there will be only one value associated with a time.
+
 The values are added to an hash table mapping these values to times.
 At the same time the values are added to a skip list to maintain
 sorting with respect times.
@@ -17,6 +16,9 @@ sorting with respect times.
 Implementation is almost equivalent to zsets.
 The only caveat is the switching between scores(times) and members(values) in the hash table.
 Small difference, but an important one.
+The implementation is of a unique sorted associative container and uses
+uses two data structures to hold times and values in order to obtain
+O(log(N)) on INSERT and REMOVE operations and O(1) on RETRIEVAL via times.
 
  
 TLEN
@@ -73,4 +75,4 @@ Count element in range by score::
 	tcount score_start,score_end
  
 
-_ redis: http://code.google.com/p/redis/
+__ redis: http://code.google.com/p/redis/
