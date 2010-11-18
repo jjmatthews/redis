@@ -17,9 +17,13 @@ there will be only one value associated with a time.
 Internally, values are added to a hash table mapping them to times.
 At the same time they are added to a skip list to maintain
 sorting with respect to times.
+
 Implementation is almost equivalent to zsets, and they look like zsets. But they are not zsets!
-Repeat with me, they are not zsets!.
+
+Repeat with me, they are not zsets!
+
 The (very important) caveat is the switching between scores(times) and members(values) in the hash table.
+
 
 Performance::
 
@@ -83,8 +87,10 @@ Count element in range by score::
 	
 TSUNION
 -----------------------------------------
-**still to decide what form the value will take**
-Union ``N`` timeseries. If a series have missing times, ``NaN`` will be inserted::
+It will return a new timeseries with times given by unions of timeseries
+times and values given by a collection
+(**still to decide what form the value will take**).
+If a series have missing times, ``NaN`` will be inserted::
 
 	TSUNION key1, key2, ..., keyN
 	
@@ -92,9 +98,10 @@ Union ``N`` timeseries. If a series have missing times, ``NaN`` will be inserted
 TSINTERCEPTION
 -----------------------------------------
 **still to decide what form the value will take**
+
 Merge ``N`` by performing an interception of times::
 
-	TSUNION key1, key2, ..., keyN
+	TSINTERCEPTION key1, key2, ..., keyN
  
 
 .. _redis: http://code.google.com/p/redis/
