@@ -215,7 +215,7 @@ void trangeRemaining(redisClient *c, int *withscores, int *withvalues) {
 		int pos = 4;
 
 		while (remaining) {
-			if (remaining >= 1 && !strcasecmp(c->argv[pos]->ptr,"withscores")) {
+			if (remaining >= 1 && !strcasecmp(c->argv[pos]->ptr,"withtimes")) {
 				pos++; remaining--;
 				*withscores = 1;
 			} else if (remaining >= 1 && !strcasecmp(c->argv[pos]->ptr,"novalues")) {

@@ -3,25 +3,27 @@
 Time Series API
 =============================
 
-This is a proposal for a possible implementation a timeserie API in redis_.
+This is a proposal for a possible implementation of a timeserie API in redis_.
+
 A timeserie is an important data-structure not yet supported.
-It is a unique sorted associative container, that is to say it associates unique times to values. 
+It is represented by a unique sorted associative container,
+that is to say it associates ordered unique times to values. 
 
 Values, which can be anything you like, are ordered with respect to times (double values),
-and can be accessed by times or rank (the ordr of times in the timeserie).
+and can be accessed by times or rank (the order of times in the timeserie).
 Times are unique, that is to say in a timeserie
 there will be only one value associated with a time.
 
-Internally, Values are added to an hash table mapping these values to times.
-At the same time the values are added to a skip list to maintain
+Internally, values are added to a hash table mapping them to times.
+At the same time they are added to a skip list to maintain
 sorting with respect times.
- 
-Implementation is almost equivalent to zsets.
+Implementation is almost equivalent to zsets, and they look like zsets. But they are not.
 The only caveat is the switching between scores(times) and members(values) in the hash table.
-Small difference, but an important one.
-The implementation is of a unique sorted associative container and uses
-uses two data structures to hold times and values in order to obtain
-O(log(N)) on INSERT and REMOVE operations and O(1) on RETRIEVAL via times.
+
+Performance::
+
+	O(log(N)) on INSERT and REMOVE operations
+	O(1) on RETRIEVAL via times
 
  
 TSLEN

@@ -9,9 +9,9 @@ start_server {tags {"ts"}} {
         r tsadd ttmp 1 x
         r tsadd ttmp 3 z
         r tsadd ttmp 2 y
-        set aux1 [r tsrange ttmp 0 -1 withscores]
+        set aux1 [r tsrange ttmp 0 -1 withtimes]
         r tsadd ttmp 1 xy
-        set aux2 [r tsrange ttmp 0 -1 withscores]
+        set aux2 [r tsrange ttmp 0 -1 withtimes]
         list $aux1 $aux2
     } {{1 x 2 y 3 z} {1 xy 2 y 3 z}}
 
@@ -50,7 +50,25 @@ start_server {tags {"ts"}} {
         assert_equal {} [r tsrange ttmp 1 -5]
 
         # withscores
-        assert_equal {1 a 2 b 3 a 4 c} [r tsrange ttmp 0 -1 withscores]
+        assert_equal {1 a 2 b 3 a 4 c} [r tsrange ttmp 0 -1 withtimes]
     }
 
+    test "TSRANGEBYTIME basics" {
+        r del ttmp
+        r tsadd ttmp 45 achtung
+        r tsadd ttmp 58 goodbye
+        r tsadd ttmp 104 kaput
+        r tsadd ttmp 23 ciao
+        r tsadd ttmp 80 ciao
+
+        assert_equal {} [r tsrangebytime ttmp 1 15]
+        assert_equal {ciao achtung} [r tsrangebytime ttmp 20 50]
+        assert_equal {ciao achtung goodbye ciao} [r tsrangebytime ttmp 20 80]
+
+        # out of range start index
+        assert_equal {} [r tsrangebytime ttmp 0 1]
+
+        # with times
+        assert_equal {23 ciao 45 achtung 58 goodbye} [r tsrangebytime ttmp 20 60 withtimes]
+    }
 }
