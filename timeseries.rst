@@ -29,6 +29,13 @@ Performance::
 
 	O(log(N)) on INSERT and REMOVE operations
 	O(1) on RETRIEVAL via times
+	
+	
+COMMANDS
+================
+
+.. contents::
+    :local:
 
  
 TSLEN
