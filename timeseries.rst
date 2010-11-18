@@ -16,9 +16,10 @@ there will be only one value associated with a time.
 
 Internally, values are added to a hash table mapping them to times.
 At the same time they are added to a skip list to maintain
-sorting with respect times.
-Implementation is almost equivalent to zsets, and they look like zsets. But they are not.
-The only caveat is the switching between scores(times) and members(values) in the hash table.
+sorting with respect to times.
+Implementation is almost equivalent to zsets, and they look like zsets. But they are not zsets!
+Repeat with me, they are not zsets!.
+The (very important) caveat is the switching between scores(times) and members(values) in the hash table.
 
 Performance::
 
