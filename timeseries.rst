@@ -3,13 +3,16 @@
 Time Series API
 =============================
 
-This is a proposal implementation for a timeserie API in redis_.
+This is a proposal for a possible implementation a timeserie API in redis_.
+A timeserie is an important data-structure not yet supported.
+It is a unique sorted associative container, that is to say it associates unique times to values. 
 
 Values, which can be anything you like, are ordered with respect to times (double values),
-and can be accessed by times or rank. Times are unique, that is to say in a timeserie
+and can be accessed by times or rank (the ordr of times in the timeserie).
+Times are unique, that is to say in a timeserie
 there will be only one value associated with a time.
 
-The values are added to an hash table mapping these values to times.
+Internally, Values are added to an hash table mapping these values to times.
 At the same time the values are added to a skip list to maintain
 sorting with respect times.
  
@@ -46,7 +49,7 @@ TSGET
 ------
 Get value at time
 
-	tsget key score
+	tsget key time
  
 TSRANGE
 ------------------
