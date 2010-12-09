@@ -1,17 +1,16 @@
 
 
-Time Series API
+Timeseries API
 =============================
 
-This is a proposal for a possible implementation of a timeserie API in redis_.
-
-A timeserie is an important data-structure not yet supported.
-It is represented by a unique sorted associative container,
+An implementation of a timeseries API in redis_.
+timeseries is an important data-structure not yet supported,
+it is represented by a unique sorted associative container,
 that is to say it associates ordered unique times to values. 
 
 Values, which can be anything you like, are ordered with respect to times (double values),
-and can be accessed by times or rank (the order of times in the timeserie).
-Times are unique, that is to say in a timeserie
+and can be accessed by times or rank (the order of times in the timeseries).
+Times are unique, that is to say in a timeseries
 there will be only one value associated with a time.
 
 Internally, values are added to a hash table mapping them to times.
@@ -19,11 +18,6 @@ At the same time they are added to a skip list to maintain
 sorting with respect to times.
 
 Implementation is almost equivalent to zsets, and they look like zsets. But they are not zsets!
-
-Repeat with me, they are not zsets!
-
-The (very important) caveat is the switching between scores(times) and members(values) in the hash table.
-
 
 Performance::
 
@@ -69,27 +63,27 @@ TSRANGE
 ------------------
 Range by rank in skiplist::
 
-	trange key start end <flag>
+	tsrange key start end <flag>
  
 Where start and end are integers following the same
 Redis conventions as zrange, <flag> is an optional
 string which can take two values: ``withtimes`` or ``novalues``.
  
-	trange key start end			-> return values
-	trange key start end withtimes	-> return (time,value)s
-	trange key start end novalues	-> return times
+	tsrange key start end			-> return values
+	tsrange key start end withtimes	-> return (time,value)s
+	tsrange key start end novalues	-> return times
  
 TSRANGEBYTIME
 ------------------
 Range by times
  
-	trangebyscore score_start score_end <flag>
+	tsrangebyscore score_start score_end <flag>
  
 TSCOUNT
 ------------------
-Count element in range by score::
+Count element in range by ``time``::
 
-	tcount score_start,score_end
+	tscount time_start,time_end
 	
 	
 TSUNION
