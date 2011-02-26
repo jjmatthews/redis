@@ -1,4 +1,5 @@
 #include "redis.h"
+#include "t_ts.h"
 
 #include <math.h>
 
@@ -174,6 +175,7 @@ int zslDelete(zskiplist *zsl, double score, robj *obj) {
     return 0; /* not found */
 }
 
+
 /* Delete all the elements with score between min and max from the skiplist.
  * Min and mx are inclusive, so a score >= min || score <= max is deleted.
  * Note that this function takes the reference to the hash table view of the
@@ -342,7 +344,7 @@ int zslParseRange(robj *min, robj *max, zrangespec *spec) {
  * Sorted set commands 
  *----------------------------------------------------------------------------*/
 
-/* This generic command implements both MADD and MINCRBY. */
+/* This generic command implements both ZADD and ZINCRBY. */
 void zaddGenericCommand(redisClient *c, robj *key, robj *ele, double score, int incr) {
     robj *zsetobj;
     zset *zs;

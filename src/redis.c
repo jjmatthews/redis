@@ -28,7 +28,7 @@
  */
 
 #include "redis.h"
-#include "t_ts.h"
+#include "t_ts.h" /* Timeseries header */
 
 #ifdef HAVE_BACKTRACE
 #include <execinfo.h>
@@ -188,15 +188,15 @@ struct redisCommand redisCommandTable[] = {
     {"punsubscribe",punsubscribeCommand,-1,0,NULL,0,0,0,0,0},
     {"publish",publishCommand,3,REDIS_CMD_FORCE_REPLICATION,NULL,0,0,0,0,0},
     {"watch",watchCommand,-2,0,NULL,0,0,0,0,0},
-    {"unwatch",unwatchCommand,1,0,NULL,0,0,0,0,0}
+    {"unwatch",unwatchCommand,1,0,NULL,0,0,0,0,0},
     /* timeseries commans */
-    {"tslen",tlenCommand,2,0,NULL,1,1,1},
-    {"tsexists",texistsCommand,3,0,NULL,1,1,1},
-    {"tsadd",taddCommand,-4,REDIS_CMD_DENYOOM,NULL,1,1,1},
-    {"tsget",tgetCommand,3,0,NULL,1,1,1},
-    {"tsrange",trangeCommand,-4,0,NULL,1,1,1},
-    {"tsrangebytime",trangebyscoreCommand,-4,0,NULL,1,1,1},
-    {"tscount",tcountCommand,4,0,NULL,1,1,1}
+    {"tslen",tslenCommand,2,0,NULL,1,1,1,0,0},
+    {"tsexists",tsexistsCommand,3,0,NULL,1,1,1,0,0},
+    {"tsadd",tsaddCommand,-4,REDIS_CMD_DENYOOM,NULL,1,1,1,0,0},
+    {"tsget",tsgetCommand,3,0,NULL,1,1,1,0,0},
+    {"tsrange",tsrangeCommand,-4,0,NULL,1,1,1,0,0},
+    {"tsrangebytime",tsrangebytimeCommand,-4,0,NULL,1,1,1,0,0},
+    {"tscount",tscountCommand,4,0,NULL,1,1,1,0,0}
 };
 
 /*============================ Utility functions ============================ */

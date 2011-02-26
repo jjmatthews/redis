@@ -1,8 +1,8 @@
 start_server {tags {"ts"}} {
-    proc create_map {key items} {
+    proc create_ts {key items} {
 	    r del $key
 	    foreach {score k entry} $items {
-	        r tadd $key $score $k $entry
+	        r tsadd $key $score $k $entry
 	    }
     }
     test {TS basic TSADD and value update} {

@@ -1,4 +1,5 @@
 #include "redis.h"
+#include "t_ts.h" /* timeseries stuff */
 #include <pthread.h>
 #include <math.h>
 
@@ -168,7 +169,7 @@ void decrRefCount(void *obj) {
         case REDIS_SET: freeSetObject(o); break;
         case REDIS_ZSET: freeZsetObject(o); break;
         case REDIS_HASH: freeHashObject(o); break;
-        case REDIS_MAP: freeZsetObject(o); break;
+        case REDIS_TS: freeZsetObject(o); break;
         default: redisPanic("Unknown object type"); break;
         }
         o->ptr = NULL; /* defensive programming. We'll see NULL in traces. */
