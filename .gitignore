@@ -21,3 +21,6 @@ src/configs
 src/redis-server.dSYM
 redis.ds
 src/redis.conf
+Debug/*
+*.cproject
+*.project
