@@ -380,8 +380,8 @@ int rdbSaveObject(FILE *fp, robj *o) {
             }
             dictReleaseIterator(di);
         }
-    } else if (o->type == REDIS_MAP) {
-    	/* Save the map*/
+    } else if (o->type == REDIS_TS) {
+    	/* Save the ts*/
     	zset *mp = o->ptr;
     	dictIterator *di = dictGetIterator(mp->dict);
     	dictEntry *de;
@@ -847,20 +847,20 @@ robj *rdbLoadObject(int type, FILE *fp) {
                 dictAdd((dict*)o->ptr,key,val);
             }
         }
-    } else if (type == REDIS_MAP) {
+    } else if (type == REDIS_TS) {
     	size_t zsetlen;
     	robj *value, *score;
 		double scoreval;
 
 		if ((zsetlen = rdbLoadLen(fp,NULL)) == REDIS_RDB_LENERR) return NULL;
-		o = createMapObject();
+		o = createTsObject();
 		while(zsetlen--) {
 			if ((value = rdbLoadEncodedStringObject(fp)) == NULL) return NULL;
 			value = tryObjectEncoding(value);
 			if ((score = rdbLoadEncodedStringObject(fp)) == NULL) return NULL;
 			score = tryObjectEncoding(score);
 			if( getDoubleFromObject(score, &scoreval) != REDIS_OK) return NULL;
-			mapTypeSet(o, scoreval, score, value);
+			tsTypeSet(o, scoreval, score, value);
 		}
     } else {
         redisPanic("Unknown object type");

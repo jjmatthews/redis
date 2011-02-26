@@ -1,10 +1,11 @@
 
-
-Timeseries API
+=============================
+Redis timeseries API
 =============================
 
-An implementation of a timeseries API in redis_.
-timeseries is an important data-structure not yet supported,
+**An implementation of a timeseries API in redis_.**
+
+Timeseries is an important data-structure not yet supported in redis,
 it is represented by a unique sorted associative container,
 that is to say it associates ordered unique times to values. 
 
@@ -23,13 +24,13 @@ Performance::
 
 	O(log(N)) on INSERT and REMOVE operations
 	O(1) on RETRIEVAL via times
-	
-	
-COMMANDS
-================
 
 .. contents::
     :local:
+    	
+	
+COMMANDS
+================
 
  
 TSLEN
@@ -105,6 +106,19 @@ Merge ``N`` by performing an interception of times::
 	TSINTERCEPTION key1, key2, ..., keyN
  
 
- 
+SOURCE CODE CHANGES
+==========================
 
-.. _redis: http://code.google.com/p/redis/
+I have tried as much as possible to be not intrusive so that it should be relatively straightforward to
+add track changes. In a nutshell, these are the additions:
+
+* Added 2 files, t_ts.h_ and t_ts.c_.
+* Modified redis.c_ to add timeseries commands to the command table and added the ``ts_h`` include.
+* Modified Makefile_ so that ``t_ts.c`` is compiled.
+
+
+.. _redis: http://redis.io/
+.. _Makefile: https://github.com/lsbardel/redis/blob/redis-timeseries/src/Makefile
+.. _t_ts.c: https://github.com/lsbardel/redis/blob/redis-timeseries/src/t_ts.c
+.. _t_ts.h: https://github.com/lsbardel/redis/blob/redis-timeseries/src/t_ts.h
+.. _redis.c: https://github.com/lsbardel/redis/blob/redis-timeseries/src/redis.c

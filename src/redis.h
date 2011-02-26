@@ -69,7 +69,6 @@
 #define REDIS_SET 2
 #define REDIS_ZSET 3
 #define REDIS_HASH 4
-#define REDIS_MAP 5
 #define REDIS_VMPOINTER 8
 
 /* Objects encoding. Some kind of objects like Strings and Hashes can be
@@ -638,6 +637,9 @@ dictType hashDictType;
  * Functions prototypes
  *----------------------------------------------------------------------------*/
 
+/* Utils */
+long long ustime(void);
+
 /* networking.c -- Networking and Client related operations */
 redisClient *createClient(int fd);
 void closeTimedoutClients(void);
@@ -729,7 +731,6 @@ int checkType(redisClient *c, robj *o, int type);
 int getLongLongFromObjectOrReply(redisClient *c, robj *o, long long *target, const char *msg);
 int getDoubleFromObjectOrReply(redisClient *c, robj *o, double *target, const char *msg);
 int getLongLongFromObject(robj *o, long long *target);
-int getDoubleFromObject(robj *o, double *target);
 char *strEncoding(int encoding);
 int compareStringObjects(robj *a, robj *b);
 int equalStringObjects(robj *a, robj *b);
@@ -787,10 +788,6 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal);
 zskiplist *zslCreate(void);
 void zslFree(zskiplist *zsl);
 zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj);
-int zslParseRange(robj *min, robj *max, zrangespec *spec);
-zskiplistNode *zslFirstWithScore(zskiplist *zsl, double score);
-zskiplistNode* zslistTypeGetElementByRank(zskiplist *zsl, unsigned long rank);
-
 
 /* Core functions */
 void freeMemoryIfNeeded(void);
@@ -1038,7 +1035,6 @@ void punsubscribeCommand(redisClient *c);
 void publishCommand(redisClient *c);
 void watchCommand(redisClient *c);
 void unwatchCommand(redisClient *c);
-
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__ ((deprecated));

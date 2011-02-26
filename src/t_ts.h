@@ -1,38 +1,51 @@
 /*
- * t_map.h
+ * t_ts.h
  *
- *  Created on: 14 Nov 2010
+ *  First created on: 14 Nov 2010
  *      Author: lsbardel
  */
 
-#ifndef __T_MAP_H_
-#define __T_MAP_H_
+#ifndef _TIMESERIES_H
+#define _TIMESERIES_H
 
 #include "redis.h"
 
+#define REDIS_TS 5
 
 /*
  * 7 TIMESERIES COMMANDS
  */
-void tlenCommand(redisClient *c);
-void texistsCommand(redisClient *c);
-void taddCommand(redisClient *c);
-void tgetCommand(redisClient *c);
-void trangeCommand(redisClient *c);
-void trangebyscoreCommand(redisClient *c);
-void tcountCommand(redisClient *c);
+void tslenCommand(redisClient *c);
+void tsexistsCommand(redisClient *c);
+void tsaddCommand(redisClient *c);
+void tsgetCommand(redisClient *c);
+void tsrangeCommand(redisClient *c);
+void tsrangebytimeCommand(redisClient *c);
+void tscountCommand(redisClient *c);
 
 
+/* ZSET internals commands - Implemented in t_zset.c */
 
-/* Map internals */
-robj *createMapObject(void);
-int mapTypeSet(robj *o, double score, robj *key, robj *value);
-int mapTypeExists(robj *o, robj *key);
-robj *mapTypeGet(robj *o, robj *key);
-robj *mapTypeLookupWriteOrCreate(redisClient *c, robj *key);
-void trangeGenericCommand(redisClient *c, int start, int end, int withscores, int withvalues, int reverse);
-void trangebyscoreGenericCommand(redisClient *c, int reverse, int justcount);
-void trangeRemaining(redisClient *c, int *withscores, int *withvalues);
+/* Struct to hold a inclusive/exclusive range spec. */
+typedef struct {
+    double min, max;
+    int minex, maxex; /* are min or max exclusive? */
+} zrangespec;
+
+zskiplistNode *zslFirstWithScore(zskiplist *zsl, double score);
+zskiplistNode* zslistTypeGetElementByRank(zskiplist *zsl, unsigned long rank);
+int zslParseRange(robj *min, robj *max, zrangespec *spec);
 
 
-#endif /* __T_MAP_H_ */
+/* Timeseries internals */
+robj *createTsObject(void);
+int tsTypeSet(robj *o, double time, robj *key, robj *value);
+int tsTypeExists(robj *o, robj *key);
+robj *tsTypeGet(robj *o, robj *key);
+robj *tsTypeLookupWriteOrCreate(redisClient *c, robj *key);
+void tsrangeGenericCommand(redisClient *c, int start, int end, int withtimes, int withvalues, int reverse);
+void tsrangebytimeGenericCommand(redisClient *c, int reverse, int justcount);
+void tsrangeRemaining(redisClient *c, int *withtimes, int *withvalues);
+
+
+#endif /* _TIMESERIES_H */

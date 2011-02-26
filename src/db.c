@@ -1,4 +1,5 @@
 #include "redis.h"
+#include "t_ts.h"
 
 #include <signal.h>
 
@@ -375,7 +376,7 @@ void typeCommand(redisClient *c) {
         case REDIS_SET: type = "set"; break;
         case REDIS_ZSET: type = "zset"; break;
         case REDIS_HASH: type = "hash"; break;
-        case REDIS_MAP: type = "map"; break;
+        case REDIS_TS: type = "ts"; break;
         default: type = "unknown"; break;
         }
     }
