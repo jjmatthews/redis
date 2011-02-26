@@ -105,4 +105,6 @@ Merge ``N`` by performing an interception of times::
 	TSINTERCEPTION key1, key2, ..., keyN
  
 
+ 
+
 .. _redis: http://code.google.com/p/redis/

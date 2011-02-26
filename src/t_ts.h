@@ -12,7 +12,7 @@
 
 
 /*
- * 7 MAP COMMANDS
+ * 7 TIMESERIES COMMANDS
  */
 void tlenCommand(redisClient *c);
 void texistsCommand(redisClient *c);
