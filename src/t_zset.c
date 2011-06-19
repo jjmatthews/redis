@@ -586,12 +586,13 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
     dictIterator *di;
     dictEntry *de;
     int touched = 0;
+    int withscores = 0;
 
     /* expect setnum input keys to be given */
     setnum = atoi(c->argv[2]->ptr);
     if (setnum < 1) {
         addReplyError(c,
-            "at least 1 input key is needed for ZUNIONSTORE/ZINTERSTORE");
+            "at least 1 input key is needed for ZUNIONSTORE/ZINTERSTORE/DIFFSTORE");
         return;
     }
 
@@ -628,7 +629,10 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
         int remaining = c->argc - j;
 
         while (remaining) {
-            if (remaining >= (setnum + 1) && !strcasecmp(c->argv[j]->ptr,"weights")) {
+            if (op == REDIS_OP_DIFF && !strcasecmp(c->argv[j]->ptr,"withscores")) {
+                j++; remaining--;
+                withscores = 1;
+            } else if (remaining >= (setnum + 1) && !strcasecmp(c->argv[j]->ptr,"weights")) {
                 j++; remaining--;
                 for (i = 0; i < setnum; i++, j++, remaining--) {
                     if (getDoubleFromObjectOrReply(c,c->argv[j],&src[i].weight,
@@ -638,7 +642,7 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
                         return;
                     }
                 }
-            } else if (remaining >= 2 && !strcasecmp(c->argv[j]->ptr,"aggregate")) {
+            } else if (op != REDIS_OP_DIFF && remaining >= 2 && !strcasecmp(c->argv[j]->ptr,"aggregate")) {
                 j++; remaining--;
                 if (!strcasecmp(c->argv[j]->ptr,"sum")) {
                     aggregate = REDIS_AGGR_SUM;
@@ -660,9 +664,11 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
         }
     }
 
-    /* sort sets from the smallest to largest, this will improve our
-     * algorithm's performance */
-    qsort(src,setnum,sizeof(zsetopsrc),qsortCompareZsetopsrcByCardinality);
+    /* if performing union or inter, sort sets from the smallest
+       to largest, this will improve our algorithm's performance */
+    if (op != REDIS_OP_DIFF) {
+        qsort(src,setnum,sizeof(zsetopsrc), qsortCompareZsetopsrcByCardinality);
+    }
 
     dstobj = createZsetObject();
     dstzset = dstobj->ptr;
@@ -731,9 +737,44 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
             }
             dictReleaseIterator(di);
         }
+    } else if (op == REDIS_OP_DIFF) {
+        for (i = 0; i < setnum; i++) {
+            if (!src[i].dict) continue;
+
+            di = dictGetIterator(src[i].dict);
+            while((de = dictNext(di)) != NULL) {
+                double score, deleted;
+                robj *o = dictGetEntryKey(de);
+
+                /* initialize score */
+                score = src[i].weight * zunionInterDictValue(de);
+
+                if(i) {
+                    /* find in dest dictionary */
+                    dictEntry *dstde = dictFind(dstzset->dict,o);
+                    if (dstde == NULL)
+                        continue;
+
+                    if (withscores) {
+                        deleted = zslDelete(dstzset->zsl, score, o);
+                    } else {
+                        deleted = zslDelete(dstzset->zsl, *(double *)dictGetEntryVal(dstde),o);
+                    }
+
+                    if (deleted != 0)
+                        dictDelete(dstzset->dict,o);
+                } else {
+                    znode = zslInsert(dstzset->zsl,score,o);
+                    incrRefCount(o); /* added to skiplist */
+                    dictAdd(dstzset->dict,o,&znode->score);
+                    incrRefCount(o); /* added to dictionary */
+                }
+            }
+            dictReleaseIterator(di);
+        }
     } else {
-        /* unknown operator */
-        redisAssert(op == REDIS_OP_INTER || op == REDIS_OP_UNION);
+         /* unknown operator */
+        redisAssert(op == REDIS_OP_INTER || op == REDIS_OP_UNION || op == REDIS_OP_DIFF);
     }
 
     if (dbDelete(c->db,dstkey)) {
@@ -759,6 +800,10 @@ void zunionstoreCommand(redisClient *c) {
 
 void zinterstoreCommand(redisClient *c) {
     zunionInterGenericCommand(c,c->argv[1], REDIS_OP_INTER);
+}
+
+void zdiffstoreCommand(redisClient *c) {
+    zunionInterGenericCommand(c,c->argv[1], REDIS_OP_DIFF);
 }
 
 void zrangeGenericCommand(redisClient *c, int reverse) {

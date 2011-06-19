@@ -485,6 +485,15 @@ start_server {tags {"zset"}} {
         list [r zinterstore zsetc 2 zseta zsetb aggregate max] [r zrange zsetc 0 -1 withscores]
     } {2 {b 2 c 3}}
     
+    test {ZDIFFSTORE basics} {
+        list [r zdiffstore zsetc 2 zseta zsetb] [r zrange zsetc 0 -1 withscores]
+    } {1 {a 1}}
+    
+    test {ZDIFFSTORE with WITHSCORES} {
+    	r zadd zsetb 2 b
+        list [r zdiffstore zsetc 2 zseta zsetb withscores] [r zrange zsetc 0 -1 withscores]
+    } {2 {a 1 c 3}}
+    
     foreach cmd {ZUNIONSTORE ZINTERSTORE} {
         test "$cmd with +inf/-inf scores" {
             r del zsetinf1 zsetinf2

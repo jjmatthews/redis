@@ -85,27 +85,8 @@ TSCOUNT
 Count element in range by ``time``::
 
 	tscount time_start,time_end
-	
-	
-TSUNION
------------------------------------------
-It will return a new timeseries with times given by unions of timeseries
-times and values given by a collection
-(**still to decide what form the value will take**).
-If a series have missing times, ``NaN`` will be inserted::
 
-	TSUNION key1, key2, ..., keyN
-	
-	
-TSINTERCEPTION
------------------------------------------
-**still to decide what form the value will take**
-
-Merge ``N`` by performing an interception of times::
-
-	TSINTERCEPTION key1, key2, ..., keyN
  
-
 SOURCE CODE CHANGES
 ==========================
 
