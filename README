@@ -1,3 +1,17 @@
+A Fork of Redis with Some added Functionalities
+==================================================
+
+ 1) Timeseries_ API.
+ 2) `Extra Commands`_.
+
+
+.. _Timeseries: https://github.com/lsbardel/redis/blob/quantredis/timeseries.rst
+.. _`Extra Commands`: https://github.com/lsbardel/redis/blob/quantredis/extracommands.rst
+
+
+Original Redis README
+=============================
+
 Where to find complete Redis documentation?
 -------------------------------------------
 

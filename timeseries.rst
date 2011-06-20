@@ -99,7 +99,7 @@ add track changes. In a nutshell, these are the additions:
 
 
 .. _redis: http://redis.io/
-.. _Makefile: https://github.com/lsbardel/redis/blob/redis-timeseries/src/Makefile
-.. _t_ts.c: https://github.com/lsbardel/redis/blob/redis-timeseries/src/t_ts.c
-.. _t_ts.h: https://github.com/lsbardel/redis/blob/redis-timeseries/src/t_ts.h
-.. _redis.c: https://github.com/lsbardel/redis/blob/redis-timeseries/src/redis.c
+.. _Makefile: https://github.com/lsbardel/redis/blob/quantredis/src/Makefile
+.. _t_ts.c: https://github.com/lsbardel/redis/blob/quantredis/src/t_ts.c
+.. _t_ts.h: https://github.com/lsbardel/redis/blob/quantredis/src/t_ts.h
+.. _redis.c: https://github.com/lsbardel/redis/blob/quantredis/src/redis.c
