@@ -23,11 +23,17 @@ start_server {tags {"ts"}} {
         r tslen ttmp-blabla
     } {0}
 	
-    test {TSGET on existing keys} {
-    	r tsget ttmp 1
-	r tsget ttmp 2
-	r tsget ttmp 3   
-    } {xy y z}
+    test "TSGET on existing times" {
+	assert_equal {xy} [r tsget ttmp 1]
+	assert_equal {y} [r tsget ttmp 2]
+	assert_equal {z} [r tsget ttmp 3]
+    }
+	
+    test "TSGET on missing times" {
+    	assert_equal {} [r tsget ttmp 1.1]
+    	assert_equal {} [r tsget ttmp 2.4]
+    	assert_equal {} [r tsget ttmp 0]
+    }
 
     test "TSRANGE basics" {
         r del ttmp

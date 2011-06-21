@@ -136,7 +136,7 @@ robj *tsTypeGet(robj *o, double score) {
     robj *value = NULL;
     zskiplist *ts = o->ptr;
     zskiplistNode* ln = zslFirstWithScore(ts,score);
-	if (ln != NULL) {
+	if (ln != NULL && ln->score == score) {
 		value = ln->obj;
 		incrRefCount(value);
 	}
