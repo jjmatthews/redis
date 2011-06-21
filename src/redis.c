@@ -190,7 +190,7 @@ struct redisCommand redisCommandTable[] = {
     {"publish",publishCommand,3,REDIS_CMD_FORCE_REPLICATION,NULL,0,0,0,0,0},
     {"watch",watchCommand,-2,0,NULL,0,0,0,0,0},
     {"unwatch",unwatchCommand,1,0,NULL,0,0,0,0,0},
-    /* timeseries commans */
+    /* timeseries commands */
     {"tslen",tslenCommand,2,0,NULL,1,1,1,0,0},
     {"tsexists",tsexistsCommand,3,0,NULL,1,1,1,0,0},
     {"tsadd",tsaddCommand,-4,REDIS_CMD_DENYOOM,NULL,1,1,1,0,0},

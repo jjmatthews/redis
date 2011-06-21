@@ -140,6 +140,11 @@ void freeZsetObject(robj *o) {
     zfree(zs);
 }
 
+void freeTsObject(robj *o) {
+    zskiplist *zs = o->ptr;
+    zslFree(zs);
+}
+
 void freeHashObject(robj *o) {
     switch (o->encoding) {
     case REDIS_ENCODING_HT:
@@ -169,7 +174,7 @@ void decrRefCount(void *obj) {
         case REDIS_SET: freeSetObject(o); break;
         case REDIS_ZSET: freeZsetObject(o); break;
         case REDIS_HASH: freeHashObject(o); break;
-        case REDIS_TS: freeZsetObject(o); break;
+        case REDIS_TS: freeTsObject(o); break;
         default: redisPanic("Unknown object type"); break;
         }
         o->ptr = NULL; /* defensive programming. We'll see NULL in traces. */

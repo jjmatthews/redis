@@ -348,18 +348,21 @@ int rdbSaveObject(FILE *fp, robj *o) {
         }
     } else if (o->type == REDIS_TS) {
     	/* Save the ts*/
-    	zset *mp = o->ptr;
-    	dictIterator *di = dictGetIterator(mp->dict);
-    	dictEntry *de;
-
-    	if (rdbSaveLen(fp,dictSize(mp->dict)) == -1) return -1;
-    	while((de = dictNext(di)) != NULL) {
-    		robj *score  = dictGetEntryKey(de);
-    		robj *eleobj = dictGetEntryVal(de);
+        zskiplist *ts = o->ptr;
+        zskiplistNode *ln;
+        double score;
+        if (rdbSaveLen(fp,ts->length) == -1) return -1;
+        nwritten += n;
+        ln = ts->header->level[0].forward;
+    	while(ln != NULL) {
+    		score  = ln->score;
+    		robj *eleobj = ln->obj;
     		if (rdbSaveStringObject(fp,eleobj) == -1) return -1;
-    		if (rdbSaveStringObject(fp,score) == -1) return -1;
+    		nwritten += n;
+    		if (rdbSaveDoubleValue(fp,score) == -1) return -1;
+    		nwritten += n;
+    		ln = ln->level[0].forward;
 		}
-		dictReleaseIterator(di);
     } else {
         redisPanic("Unknown object type");
     }
@@ -867,18 +870,16 @@ robj *rdbLoadObject(int type, FILE *fp) {
         }
     } else if (type == REDIS_TS) {
     	size_t zsetlen;
-    	robj *value, *score;
-		double scoreval;
+    	robj *value;
+		double score;
 
 		if ((zsetlen = rdbLoadLen(fp,NULL)) == REDIS_RDB_LENERR) return NULL;
 		o = createTsObject();
 		while(zsetlen--) {
 			if ((value = rdbLoadEncodedStringObject(fp)) == NULL) return NULL;
 			value = tryObjectEncoding(value);
-			if ((score = rdbLoadEncodedStringObject(fp)) == NULL) return NULL;
-			score = tryObjectEncoding(score);
-			if( getDoubleFromObject(score, &scoreval) != REDIS_OK) return NULL;
-			tsTypeSet(o, scoreval, score, value);
+			if ((rdbLoadDoubleValue(fp,&score)) == -1) return NULL;
+			tsTypeSet(o, score, value);
 		}
     } else {
         redisPanic("Unknown object type");

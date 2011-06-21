@@ -1,9 +1,9 @@
 start_server {tags {"ts"}} {
     proc create_ts {key items} {
-	    r del $key
-	    foreach {score k entry} $items {
-	        r tsadd $key $score $k $entry
-	    }
+        r del $key
+        foreach {score k entry} $items {
+            r tsadd $key $score $k $entry
+        }
     }
     test {TS basic TSADD and value update} {
         r tsadd ttmp 1 x
@@ -22,6 +22,12 @@ start_server {tags {"ts"}} {
     test {TSLEN non existing key} {
         r tslen ttmp-blabla
     } {0}
+	
+    test {TSGET on existing keys} {
+    	r tsget ttmp 1
+	r tsget ttmp 2
+	r tsget ttmp 3   
+    } {xy y z}
 
     test "TSRANGE basics" {
         r del ttmp

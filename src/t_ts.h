@@ -38,10 +38,11 @@ int zslParseRange(robj *min, robj *max, zrangespec *spec);
 
 
 /* Timeseries internals */
+void freeTsObject(robj *o);
 robj *createTsObject(void);
-int tsTypeSet(robj *o, double time, robj *key, robj *value);
-int tsTypeExists(robj *o, robj *key);
-robj *tsTypeGet(robj *o, robj *key);
+int tsTypeSet(robj *o, double score, robj *value);
+int tsTypeExists(robj *o, double score);
+robj *tsTypeGet(robj *o, double score);
 robj *tsTypeLookupWriteOrCreate(redisClient *c, robj *key);
 void tsrangeGenericCommand(redisClient *c, int start, int end, int withtimes, int withvalues, int reverse);
 void tsrangebytimeGenericCommand(redisClient *c, int reverse, int justcount);

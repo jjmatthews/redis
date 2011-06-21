@@ -9,32 +9,42 @@
 
 void tslenCommand(redisClient *c) {
     robj *o;
-    zset *mp;
+    zskiplist *ts;
 
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,o,REDIS_TS)) return;
 
-    mp = o->ptr;
-    addReplyLongLong(c,mp->zsl->length);
+    ts = o->ptr;
+    addReplyLongLong(c,ts->length);
 }
 
 
 void tsexistsCommand(redisClient *c) {
     robj *o;
+    double score;
 
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,o,REDIS_TS)) return;
 
-    addReply(c, tsTypeExists(o,c->argv[2]) ? shared.cone : shared.czero);
+    if(getDoubleFromObjectOrReply(c,c->argv[2],&score,NULL) != REDIS_OK) return;
+
+    addReply(c, tsTypeExists(o,score) ? shared.cone : shared.czero);
 }
 
 
 void tsgetCommand(redisClient *c) {
 	robj *o, *value;
+	double score;
+
 	if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.nullbulk)) == NULL ||
 		checkType(c,o,REDIS_TS)) return;
 
-	if ((value = tsTypeGet(o,c->argv[2])) != NULL) {
+    if(getDoubleFromObjectOrReply(c,c->argv[2],&score,NULL) != REDIS_OK)  {
+        addReplyError(c,"Could not convert score to double.");
+        return;
+    }
+
+	if ((value = tsTypeGet(o,score)) != NULL) {
 		addReplyBulk(c,value);
 		decrRefCount(value);
 	} else {
@@ -44,8 +54,8 @@ void tsgetCommand(redisClient *c) {
 
 
 void tsaddCommand(redisClient *c) {
-	int i;
-	double timeval;
+	int i,update;
+	double score;
 	robj *o;
 
 	if ((c->argc % 2) == 1) {
@@ -55,11 +65,12 @@ void tsaddCommand(redisClient *c) {
 
 	if ((o = tsTypeLookupWriteOrCreate(c,c->argv[1])) == NULL) return;
 	hashTypeTryConversion(o,c->argv,2,c->argc-1);
+	update = 0;
 	for (i = 2; i < c->argc; i += 2) {
-		if(getDoubleFromObjectOrReply(c,c->argv[i],&timeval,NULL) != REDIS_OK) return;
-	    tsTypeSet(o,timeval,c->argv[i],c->argv[i+1]);
+		if(getDoubleFromObjectOrReply(c,c->argv[i],&score,NULL) != REDIS_OK) return;
+	    update += tsTypeSet(o,score,c->argv[i+1]);
 	}
-	addReply(c, shared.ok);
+	addReplyLongLong(c,update);
 	touchWatchedKey(c->db,c->argv[1]);
 	server.dirty++;
 }
@@ -91,10 +102,7 @@ void tscountCommand(redisClient *c) {
  *----------------------------------------------------------------------------*/
 
 robj *createTsObject(void) {
-	zset *zs = zmalloc(sizeof(*zs));
-
-    zs->dict = dictCreate(&zsetDictType,NULL);
-    zs->zsl = zslCreate();
+    zskiplist *zs = zslCreate();
     return createObject(REDIS_TS,zs);
 }
 
@@ -116,24 +124,20 @@ robj *tsTypeLookupWriteOrCreate(redisClient *c, robj *key) {
 
 /* Test if the key exists in the given ts. Returns 1 if the key
  * exists and 0 when it doesn't. */
-int tsTypeExists(robj *o, robj *time) {
-	zset *mp = o->ptr;
-    if (dictFind(mp->dict,time) != NULL) {
-    	return 1;
-    }
-    return 0;
+int tsTypeExists(robj *o, double time) {
+	zskiplist *ts = o->ptr;
+	zskiplistNode* ln = zslFirstWithScore(ts,time);
+	return ln != NULL && ln->score == time ? 1 : 0;
 }
 
 
-/* Get the value from a hash identified by key. Returns either a string
- * object or NULL if the value cannot be found. The refcount of the object
- * is always increased by 1 when the value was found. */
-robj *tsTypeGet(robj *o, robj *time) {
+/* Get the value at time. */
+robj *tsTypeGet(robj *o, double score) {
     robj *value = NULL;
-    zset *mp = o->ptr;
-	dictEntry *de = dictFind(mp->dict,time);
-	if (de != NULL) {
-		value = dictGetEntryVal(de);
+    zskiplist *ts = o->ptr;
+    zskiplistNode* ln = zslFirstWithScore(ts,score);
+	if (ln != NULL) {
+		value = ln->obj;
 		incrRefCount(value);
 	}
     return value;
@@ -141,42 +145,24 @@ robj *tsTypeGet(robj *o, robj *time) {
 
 /* Add an element, discard the old if the key already exists.
  * Return 0 on insert and 1 on update. */
-int tsTypeSet(robj *o, double timeval, robj *time, robj *value) {
+int tsTypeSet(robj *o, double score, robj *value) {
 	int update = 0;
     robj *ro;
-    dictEntry *de;
-    zset *mp;
+    zskiplist *ts;
     zskiplistNode *ln;
-    mp = o->ptr;
+    ts = o->ptr;
 
-    de = dictFind(mp->dict,time);
-    if(de) {
-    	/* time is available.*/
-
-    	//Get the element in skiplist
-    	ln = zslFirstWithScore(mp->zsl,timeval);
-    	redisAssert(ln != NULL);
-
-    	// Update the member in the hash
-    	ro = dictGetEntryVal(de);
-    	decrRefCount(ro);
-    	dictGetEntryVal(de) = value;
-    	incrRefCount(value); /* for dict */
-
+    ln = zslFirstWithScore(ts, score);
+    if(ln != NULL && ln->score == score) {
     	//Update member in skiplist
     	ro = ln->obj;
     	decrRefCount(ro);
     	ln->obj = value;
-    	incrRefCount(value); /* for dict */
+    	incrRefCount(value);
     } else {
     	/* New element */
-        ln = zslInsert(mp->zsl,timeval,value);
-        incrRefCount(value); /* added to skiplist */
-
-        /* Update the time in the dict entry */
-        dictAdd(mp->dict,time,value);
-        incrRefCount(time); /* added to hash */
-        incrRefCount(value); /* added to hash */
+        ln = zslInsert(ts,score,value);
+        incrRefCount(value);
         update = 1;
     }
     return update;
@@ -213,16 +199,14 @@ void tsrangeGenericCommand(redisClient *c, int start, int end, int withtimes, in
     robj *o;
     int llen;
     int rangelen, j;
-    zset *mp;
-    zskiplist *zsl;
+    zskiplist *ts;
     zskiplistNode *ln;
     robj *value;
 
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptymultibulk)) == NULL
              || checkType(c,o,REDIS_TS)) return;
-	mp   = o->ptr;
-	zsl  = mp->zsl;
-	llen = zsl->length;
+	ts   = o->ptr;
+	llen = ts->length;
 
 	if (start < 0) start = llen+start;
 	if (end < 0) end = llen+end;
@@ -240,10 +224,10 @@ void tsrangeGenericCommand(redisClient *c, int start, int end, int withtimes, in
     /* check if starting point is trivial, before searching
      * the element in log(N) time */
     if (reverse) {
-        ln = start == 0 ? zsl->tail : zslistTypeGetElementByRank(zsl, llen-start);
+        ln = start == 0 ? ts->tail : zslistTypeGetElementByRank(ts, llen-start);
     } else {
         ln = start == 0 ?
-            zsl->header->level[0].forward : zslistTypeGetElementByRank(zsl, start+1);
+            ts->header->level[0].forward : zslistTypeGetElementByRank(ts, start+1);
     }
 
     /* Return the result in form of a multi-bulk reply */
@@ -264,8 +248,7 @@ void tsrangeGenericCommand(redisClient *c, int start, int end, int withtimes, in
 
 void tsrangebytimeGenericCommand(redisClient *c, int reverse, int justcount) {
 	zrangespec range;
-	zset *mp;
-	zskiplist *zsl;
+	zskiplist *ts;
 	zskiplistNode *ln;
 	robj *o, *value, *emptyreply;
 	int withvalues = 1;
@@ -291,11 +274,10 @@ void tsrangebytimeGenericCommand(redisClient *c, int reverse, int justcount) {
 	if ((o = lookupKeyReadOrReply(c,c->argv[1],emptyreply)) == NULL ||
 		checkType(c,o,REDIS_TS)) return;
 
-	mp  = o->ptr;
-	zsl = mp->zsl;
+	ts  = o->ptr;
 
 	/* If reversed, assume the elements are sorted from high to low time. */
-	ln = zslFirstWithScore(zsl,range.min);
+	ln = zslFirstWithScore(ts,range.min);
 
 	/* No "first" element in the specified interval. */
 	if (ln == NULL) {
@@ -342,29 +324,3 @@ void tsrangebytimeGenericCommand(redisClient *c, int reverse, int justcount) {
 		setDeferredMultiBulkLength(c, replylen, rangelen*(withtimes+withvalues));
 	}
 }
-
-
-/*
-void theadCommand(redisClient *c) {
-    robj *o;
-    zskiplistNode *ln;
-
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptymultibulk)) == NULL
-            || checkType(c,o,REDIS_TS)) return;
-    zset *mp   = o->ptr;
-    ln = mp->zsl->header->level[0].forward;
-    addReplyBulk(c,ln->obj);
-}
-
-
-void ttailCommand(redisClient *c) {
-    robj *o;
-    zskiplistNode *ln;
-
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptymultibulk)) == NULL
-            || checkType(c,o,REDIS_TS)) return;
-    zset *mp   = o->ptr;
-    ln = mp->zsl->tail;
-    addReplyBulk(c,ln->obj);
-}
-*/
