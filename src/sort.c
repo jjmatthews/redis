@@ -133,7 +133,7 @@ void sortCommand(redisClient *c) {
     list *operations;
     unsigned int outputlen = 0;
     int desc = 0, alpha = 0;
-    int limit_start = 0, limit_count = -1, start, end;
+    int limit_start = 0, limit_count = -1, storekey_set = 0, start, end;
     int j, dontsort = 0, vectorlen;
     int getop = 0; /* GET operation counter */
     robj *sortval, *sortby = NULL, *storekey = NULL;
@@ -178,6 +178,11 @@ void sortCommand(redisClient *c) {
             j+=2;
         } else if (!strcasecmp(c->argv[j]->ptr,"store") && leftargs >= 1) {
             storekey = c->argv[j+1];
+            storekey_set = 0;
+            j++;
+        } else if (!strcasecmp(c->argv[j]->ptr,"storeset") && leftargs >= 1) {
+            storekey = c->argv[j+1];
+            storekey_set = 1;
             j++;
         } else if (!strcasecmp(c->argv[j]->ptr,"by") && leftargs >= 1) {
             sortby = c->argv[j+1];
@@ -332,33 +337,68 @@ void sortCommand(redisClient *c) {
             }
         }
     } else {
-        robj *sobj = createZiplistObject();
+        robj *sobj;
+        if(storekey_set) {
+            sobj = createIntsetObject();
+            /* STORE option specified, set the sorting result as a set object */
+            for (j = start; j <= end; j++) {
+                listNode *ln;
+                listIter li;
 
-        /* STORE option specified, set the sorting result as a List object */
-        for (j = start; j <= end; j++) {
-            listNode *ln;
-            listIter li;
+                if (!getop) {
+                    setTypeAdd(sobj,vector[j].obj);
+                } else {
+                    listRewind(operations,&li);
+                    while((ln = listNext(&li))) {
+                        redisSortOperation *sop = ln->value;
+                        robj *val = lookupKeyByPattern(c->db,sop->pattern,
+                            vector[j].obj);
 
-            if (!getop) {
-                listTypePush(sobj,vector[j].obj,REDIS_TAIL);
-            } else {
-                listRewind(operations,&li);
-                while((ln = listNext(&li))) {
-                    redisSortOperation *sop = ln->value;
-                    robj *val = lookupKeyByPattern(c->db,sop->pattern,
-                        vector[j].obj);
+                        if (sop->type == REDIS_SORT_GET) {
+                            if (!val) val = createStringObject("",0);
 
-                    if (sop->type == REDIS_SORT_GET) {
-                        if (!val) val = createStringObject("",0);
+                            /* listTypePush does an incrRefCount, so we should take care
+                             * care of the incremented refcount caused by either
+                             * lookupKeyByPattern or createStringObject("",0) */
+                            setTypeAdd(sobj,val);
+                            decrRefCount(val);
+                        } else {
+                            /* always fails */
+                            redisAssert(sop->type == REDIS_SORT_GET);
+                        }
+                    }
+                }
+            }
+        }
+        else {
+            sobj = createZiplistObject();
 
-                        /* listTypePush does an incrRefCount, so we should take care
-                         * care of the incremented refcount caused by either
-                         * lookupKeyByPattern or createStringObject("",0) */
-                        listTypePush(sobj,val,REDIS_TAIL);
-                        decrRefCount(val);
-                    } else {
-                        /* always fails */
-                        redisAssert(sop->type == REDIS_SORT_GET);
+            /* STORE option specified, set the sorting result as a List object */
+            for (j = start; j <= end; j++) {
+                listNode *ln;
+                listIter li;
+
+                if (!getop) {
+                    listTypePush(sobj,vector[j].obj,REDIS_TAIL);
+                } else {
+                    listRewind(operations,&li);
+                    while((ln = listNext(&li))) {
+                        redisSortOperation *sop = ln->value;
+                        robj *val = lookupKeyByPattern(c->db,sop->pattern,
+                            vector[j].obj);
+
+                        if (sop->type == REDIS_SORT_GET) {
+                            if (!val) val = createStringObject("",0);
+
+                            /* listTypePush does an incrRefCount, so we should take care
+                             * care of the incremented refcount caused by either
+                             * lookupKeyByPattern or createStringObject("",0) */
+                            listTypePush(sobj,val,REDIS_TAIL);
+                            decrRefCount(val);
+                        } else {
+                            /* always fails */
+                            redisAssert(sop->type == REDIS_SORT_GET);
+                        }
                     }
                 }
             }
