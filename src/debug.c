@@ -100,7 +100,7 @@ void computeDatasetDigest(unsigned char *final) {
             mixDigest(digest,key,sdslen(key));
 
             /* Make sure the key is loaded if VM is active */
-            o = lookupKeyRead(db,keyobj);
+            o = dictGetEntryVal(de);
 
             aux = htonl(o->type);
             mixDigest(digest,&aux,sizeof(aux));
@@ -127,22 +127,57 @@ void computeDatasetDigest(unsigned char *final) {
                 }
                 setTypeReleaseIterator(si);
             } else if (o->type == REDIS_ZSET) {
-                zset *zs = o->ptr;
-                dictIterator *di = dictGetIterator(zs->dict);
-                dictEntry *de;
+                unsigned char eledigest[20];
 
-                while((de = dictNext(di)) != NULL) {
-                    robj *eleobj = dictGetEntryKey(de);
-                    double *score = dictGetEntryVal(de);
-                    unsigned char eledigest[20];
+                if (o->encoding == REDIS_ENCODING_ZIPLIST) {
+                    unsigned char *zl = o->ptr;
+                    unsigned char *eptr, *sptr;
+                    unsigned char *vstr;
+                    unsigned int vlen;
+                    long long vll;
+                    double score;
 
-                    snprintf(buf,sizeof(buf),"%.17g",*score);
-                    memset(eledigest,0,20);
-                    mixObjectDigest(eledigest,eleobj);
-                    mixDigest(eledigest,buf,strlen(buf));
-                    xorDigest(digest,eledigest,20);
+                    eptr = ziplistIndex(zl,0);
+                    redisAssert(eptr != NULL);
+                    sptr = ziplistNext(zl,eptr);
+                    redisAssert(sptr != NULL);
+
+                    while (eptr != NULL) {
+                        redisAssert(ziplistGet(eptr,&vstr,&vlen,&vll));
+                        score = zzlGetScore(sptr);
+
+                        memset(eledigest,0,20);
+                        if (vstr != NULL) {
+                            mixDigest(eledigest,vstr,vlen);
+                        } else {
+                            ll2string(buf,sizeof(buf),vll);
+                            mixDigest(eledigest,buf,strlen(buf));
+                        }
+
+                        snprintf(buf,sizeof(buf),"%.17g",score);
+                        mixDigest(eledigest,buf,strlen(buf));
+                        xorDigest(digest,eledigest,20);
+                        zzlNext(zl,&eptr,&sptr);
+                    }
+                } else if (o->encoding == REDIS_ENCODING_SKIPLIST) {
+                    zset *zs = o->ptr;
+                    dictIterator *di = dictGetIterator(zs->dict);
+                    dictEntry *de;
+
+                    while((de = dictNext(di)) != NULL) {
+                        robj *eleobj = dictGetEntryKey(de);
+                        double *score = dictGetEntryVal(de);
+
+                        snprintf(buf,sizeof(buf),"%.17g",*score);
+                        memset(eledigest,0,20);
+                        mixObjectDigest(eledigest,eleobj);
+                        mixDigest(eledigest,buf,strlen(buf));
+                        xorDigest(digest,eledigest,20);
+                    }
+                    dictReleaseIterator(di);
+                } else {
+                    redisPanic("Unknown sorted set encoding");
                 }
-                dictReleaseIterator(di);
             } else if (o->type == REDIS_HASH) {
                 hashTypeIterator *hi;
                 robj *obj;
@@ -177,26 +212,7 @@ void computeDatasetDigest(unsigned char *final) {
 void debugCommand(redisClient *c) {
     if (!strcasecmp(c->argv[1]->ptr,"segfault")) {
         *((char*)-1) = 'x';
-    } else if (!strcasecmp(c->argv[1]->ptr,"flushcache")) {
-        if (!server.ds_enabled) {
-            addReplyError(c, "DEBUG FLUSHCACHE called with diskstore off.");
-            return;
-        } else if (server.bgsavethread != (pthread_t) -1) {
-            addReplyError(c, "Can't flush cache while BGSAVE is in progress.");
-            return;
-        } else {
-            /* To flush the whole cache we need to wait for everything to
-             * be flushed on disk... */
-            cacheForcePointInTime();
-            emptyDb();
-            addReply(c,shared.ok);
-            return;
-        }
     } else if (!strcasecmp(c->argv[1]->ptr,"reload")) {
-        if (server.ds_enabled) {
-            addReply(c,shared.ok);
-            return;
-        }
         if (rdbSave(server.dbfilename) != REDIS_OK) {
             addReply(c,shared.err);
             return;
@@ -221,7 +237,6 @@ void debugCommand(redisClient *c) {
         robj *val;
         char *strenc;
 
-        if (server.ds_enabled) lookupKeyRead(c->db,c->argv[2]);
         if ((de = dictFind(c->db->dict,c->argv[2]->ptr)) == NULL) {
             addReply(c,shared.nokeyerr);
             return;
@@ -266,6 +281,12 @@ void debugCommand(redisClient *c) {
             d = sdscatprintf(d, "%02x",digest[j]);
         addReplyStatus(c,d);
         sdsfree(d);
+    } else if (!strcasecmp(c->argv[1]->ptr,"sleep") && c->argc == 3) {
+        double dtime = strtod(c->argv[2]->ptr,NULL);
+        long long utime = dtime*1000000;
+
+        usleep(utime);
+        addReply(c,shared.ok);
     } else {
         addReplyError(c,
             "Syntax error, try DEBUG [SEGFAULT|OBJECT <key>|SWAPIN <key>|SWAPOUT <key>|RELOAD]");

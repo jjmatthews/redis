@@ -26,14 +26,8 @@ void tscountCommand(redisClient *c);
 
 /* ZSET internals commands - Implemented in t_zset.c */
 
-/* Struct to hold a inclusive/exclusive range spec. */
-typedef struct {
-    double min, max;
-    int minex, maxex; /* are min or max exclusive? */
-} zrangespec;
-
-zskiplistNode *zslFirstWithScore(zskiplist *zsl, double score);
-zskiplistNode* zslistTypeGetElementByRank(zskiplist *zsl, unsigned long rank);
+zskiplistNode* zslFirstWithScore(zskiplist *zsl, double score);
+zskiplistNode* zslGetElementByRank(zskiplist *zsl, unsigned long rank);
 int zslParseRange(robj *min, robj *max, zrangespec *spec);
 
 

@@ -6,39 +6,21 @@ start_server {tags {"repl"}} {
             s -1 role
         } {slave}
 
-        test {MASTER and SLAVE dataset should be identical after complex ops} {
-            createComplexDataset r 10000
-            after 500
-            if {[r debug digest] ne [r -1 debug digest]} {
-                set csv1 [csvdump r]
-                set csv2 [csvdump {r -1}]
-                set fd [open /tmp/repldump1.txt w]
-                puts -nonewline $fd $csv1
-                close $fd
-                set fd [open /tmp/repldump2.txt w]
-                puts -nonewline $fd $csv2
-                close $fd
-                puts "Master - Slave inconsistency"
-                puts "Run diff -u against /tmp/repldump*.txt for more info"
-            }
+        test {BRPOPLPUSH replication, when blocking against empty list} {
+            set rd [redis_deferring_client]
+            $rd brpoplpush a b 5
+            r lpush a foo
+            after 1000
             assert_equal [r debug digest] [r -1 debug digest]
         }
 
-        test {MASTER and SLAVE consistency with expire} {
-            createComplexDataset r 50000 useexpire
-            after 4000 ;# Make sure everything expired before taking the digest
-            if {[r debug digest] ne [r -1 debug digest]} {
-                set csv1 [csvdump r]
-                set csv2 [csvdump {r -1}]
-                set fd [open /tmp/repldump1.txt w]
-                puts -nonewline $fd $csv1
-                close $fd
-                set fd [open /tmp/repldump2.txt w]
-                puts -nonewline $fd $csv2
-                close $fd
-                puts "Master - Slave inconsistency"
-                puts "Run diff -u against /tmp/repldump*.txt for more info"
-            }
+        test {BRPOPLPUSH replication, list exists} {
+            set rd [redis_deferring_client]
+            r lpush c 1
+            r lpush c 2
+            r lpush c 3
+            $rd brpoplpush c d 5
+            after 1000
             assert_equal [r debug digest] [r -1 debug digest]
         }
     }
@@ -72,6 +54,7 @@ start_server {tags {"repl"}} {
         
         test {SET on the master should immediately propagate} {
             r -1 set mykey bar
+            if {$::valgrind} {after 2000}
             r  0 get mykey
         } {bar}
     }

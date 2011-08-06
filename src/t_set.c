@@ -218,9 +218,9 @@ void setTypeConvert(robj *setobj, int enc) {
 
 void saddCommand(redisClient *c) {
     robj *set;
+    int j, added = 0;
 
     set = lookupKeyWrite(c->db,c->argv[1]);
-    c->argv[2] = tryObjectEncoding(c->argv[2]);
     if (set == NULL) {
         set = setTypeCreate(c->argv[2]);
         dbAdd(c->db,c->argv[1],set);
@@ -230,30 +230,37 @@ void saddCommand(redisClient *c) {
             return;
         }
     }
-    if (setTypeAdd(set,c->argv[2])) {
-        signalModifiedKey(c->db,c->argv[1]);
-        server.dirty++;
-        addReply(c,shared.cone);
-    } else {
-        addReply(c,shared.czero);
+
+    for (j = 2; j < c->argc; j++) {
+        c->argv[j] = tryObjectEncoding(c->argv[j]);
+        if (setTypeAdd(set,c->argv[j])) added++;
     }
+    if (added) signalModifiedKey(c->db,c->argv[1]);
+    server.dirty += added;
+    addReplyLongLong(c,added);
 }
 
 void sremCommand(redisClient *c) {
     robj *set;
+    int j, deleted = 0;
 
     if ((set = lookupKeyWriteOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,set,REDIS_SET)) return;
 
-    c->argv[2] = tryObjectEncoding(c->argv[2]);
-    if (setTypeRemove(set,c->argv[2])) {
-        if (setTypeSize(set) == 0) dbDelete(c->db,c->argv[1]);
-        signalModifiedKey(c->db,c->argv[1]);
-        server.dirty++;
-        addReply(c,shared.cone);
-    } else {
-        addReply(c,shared.czero);
+    for (j = 2; j < c->argc; j++) {
+        if (setTypeRemove(set,c->argv[j])) {
+            deleted++;
+            if (setTypeSize(set) == 0) {
+                dbDelete(c->db,c->argv[1]);
+                break;
+            }
+        }
     }
+    if (deleted) {
+        signalModifiedKey(c->db,c->argv[1]);
+        server.dirty += deleted;
+    }
+    addReplyLongLong(c,deleted);
 }
 
 void smoveCommand(redisClient *c) {
@@ -325,7 +332,7 @@ void scardCommand(redisClient *c) {
 }
 
 void spopCommand(redisClient *c) {
-    robj *set, *ele;
+    robj *set, *ele, *aux;
     int64_t llele;
     int encoding;
 
@@ -341,16 +348,11 @@ void spopCommand(redisClient *c) {
         setTypeRemove(set,ele);
     }
 
-    /* Change argv to replicate as SREM */
-    c->argc = 3;
-    c->argv = zrealloc(c->argv,sizeof(robj*)*(c->argc));
-
-    /* Overwrite SREM with SPOP (same length) */
-    redisAssert(sdslen(c->argv[0]->ptr) == 4);
-    memcpy(c->argv[0]->ptr, "SREM", 4);
-
-    /* Popped element already has incremented refcount */
-    c->argv[2] = ele;
+    /* Replicate/AOF this command as an SREM operation */
+    aux = createStringObject("SREM",4);
+    rewriteClientCommandVector(c,3,aux,c->argv[1],ele);
+    decrRefCount(ele);
+    decrRefCount(aux);
 
     addReplyBulk(c,ele);
     if (setTypeSize(set) == 0) dbDelete(c->db,c->argv[1]);
@@ -433,6 +435,7 @@ void sinterGenericCommand(redisClient *c, robj **setkeys, unsigned long setnum, 
     si = setTypeInitIterator(sets[0]);
     while((encoding = setTypeNext(si,&eleobj,&intobj)) != -1) {
         for (j = 1; j < setnum; j++) {
+            if (sets[j] == sets[0]) continue;
             if (encoding == REDIS_ENCODING_INTSET) {
                 /* intset with intset is simple... and fast */
                 if (sets[j]->encoding == REDIS_ENCODING_INTSET &&

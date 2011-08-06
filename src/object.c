@@ -1,6 +1,5 @@
 #include "redis.h"
 #include "t_ts.h" /* timeseries stuff */
-#include <pthread.h>
 #include <math.h>
 
 robj *createObject(int type, void *ptr) {
@@ -31,9 +30,7 @@ robj *createStringObject(char *ptr, size_t len) {
 
 robj *createStringObjectFromLongLong(long long value) {
     robj *o;
-    if (value >= 0 && value < REDIS_SHARED_INTEGERS &&
-        !server.ds_enabled &&
-        pthread_equal(pthread_self(),server.mainthread)) {
+    if (value >= 0 && value < REDIS_SHARED_INTEGERS) {
         incrRefCount(shared.integers[value]);
         o = shared.integers[value];
     } else {
@@ -94,10 +91,20 @@ robj *createHashObject(void) {
 
 robj *createZsetObject(void) {
     zset *zs = zmalloc(sizeof(*zs));
+    robj *o;
 
     zs->dict = dictCreate(&zsetDictType,NULL);
     zs->zsl = zslCreate();
-    return createObject(REDIS_ZSET,zs);
+    o = createObject(REDIS_ZSET,zs);
+    o->encoding = REDIS_ENCODING_SKIPLIST;
+    return o;
+}
+
+robj *createZsetZiplistObject(void) {
+    unsigned char *zl = ziplistNew();
+    robj *o = createObject(REDIS_ZSET,zl);
+    o->encoding = REDIS_ENCODING_ZIPLIST;
+    return o;
 }
 
 void freeStringObject(robj *o) {
@@ -133,11 +140,20 @@ void freeSetObject(robj *o) {
 }
 
 void freeZsetObject(robj *o) {
-    zset *zs = o->ptr;
-
-    dictRelease(zs->dict);
-    zslFree(zs->zsl);
-    zfree(zs);
+    zset *zs;
+    switch (o->encoding) {
+    case REDIS_ENCODING_SKIPLIST:
+        zs = o->ptr;
+        dictRelease(zs->dict);
+        zslFree(zs->zsl);
+        zfree(zs);
+        break;
+    case REDIS_ENCODING_ZIPLIST:
+        zfree(o->ptr);
+        break;
+    default:
+        redisPanic("Unknown sorted set encoding");
+    }
 }
 
 void freeTsObject(robj *o) {
@@ -167,7 +183,7 @@ void decrRefCount(void *obj) {
     robj *o = obj;
 
     if (o->refcount <= 0) redisPanic("decrRefCount against refcount <= 0");
-    if (--(o->refcount) == 0) {
+    if (o->refcount == 1) {
         switch(o->type) {
         case REDIS_STRING: freeStringObject(o); break;
         case REDIS_LIST: freeListObject(o); break;
@@ -177,9 +193,27 @@ void decrRefCount(void *obj) {
         case REDIS_TS: freeTsObject(o); break;
         default: redisPanic("Unknown object type"); break;
         }
-        o->ptr = NULL; /* defensive programming. We'll see NULL in traces. */
         zfree(o);
+    } else {
+        o->refcount--;
     }
+}
+
+/* This function set the ref count to zero without freeing the object.
+ * It is useful in order to pass a new object to functions incrementing
+ * the ref count of the received object. Example:
+ *
+ *    functionThatWillIncrementRefCount(resetRefCount(CreateObject(...)));
+ *
+ * Otherwise you need to resort to the less elegant pattern:
+ *
+ *    *obj = createObject(...);
+ *    functionThatWillIncrementRefCount(obj);
+ *    decrRefCount(obj);
+ */
+robj *resetRefCount(robj *obj) {
+    obj->refcount = 0;
+    return obj;
 }
 
 int checkType(redisClient *c, robj *o, int type) {
@@ -188,6 +222,16 @@ int checkType(redisClient *c, robj *o, int type) {
         return 1;
     }
     return 0;
+}
+
+int isObjectRepresentableAsLongLong(robj *o, long long *llval) {
+    redisAssert(o->type == REDIS_STRING);
+    if (o->encoding == REDIS_ENCODING_INT) {
+        if (llval) *llval = (long) o->ptr;
+        return REDIS_OK;
+    } else {
+        return string2ll(o->ptr,sdslen(o->ptr),llval) ? REDIS_OK : REDIS_ERR;
+    }
 }
 
 /* Try to encode a string object in order to save space */
@@ -207,7 +251,7 @@ robj *tryObjectEncoding(robj *o) {
     redisAssert(o->type == REDIS_STRING);
 
     /* Check if we can represent this string as a long integer */
-    if (isStringRepresentableAsLong(s,&value) == REDIS_ERR) return o;
+    if (!string2l(s,sdslen(s),&value)) return o;
 
     /* Ok, this object can be encoded...
      *
@@ -218,10 +262,7 @@ robj *tryObjectEncoding(robj *o) {
      * Note that we also avoid using shared integers when maxmemory is used
      * because every object needs to have a private LRU field for the LRU
      * algorithm to work well. */
-    if (!server.ds_enabled &&
-        server.maxmemory == 0 && value >= 0 && value < REDIS_SHARED_INTEGERS &&
-        pthread_equal(pthread_self(),server.mainthread))
-    {
+    if (server.maxmemory == 0 && value >= 0 && value < REDIS_SHARED_INTEGERS) {
         decrRefCount(o);
         incrRefCount(shared.integers[value]);
         return shared.integers[value];
@@ -409,6 +450,7 @@ char *strEncoding(int encoding) {
     case REDIS_ENCODING_LINKEDLIST: return "linkedlist";
     case REDIS_ENCODING_ZIPLIST: return "ziplist";
     case REDIS_ENCODING_INTSET: return "intset";
+    case REDIS_ENCODING_SKIPLIST: return "skiplist";
     default: return "unknown";
     }
 }
@@ -423,3 +465,42 @@ unsigned long estimateObjectIdleTime(robj *o) {
                     REDIS_LRU_CLOCK_RESOLUTION;
     }
 }
+
+/* This is an helper function for the DEBUG command. We need to lookup keys
+ * without any modification of LRU or other parameters. */
+robj *objectCommandLookup(redisClient *c, robj *key) {
+    dictEntry *de;
+
+    if ((de = dictFind(c->db->dict,key->ptr)) == NULL) return NULL;
+    return (robj*) dictGetEntryVal(de);
+}
+
+robj *objectCommandLookupOrReply(redisClient *c, robj *key, robj *reply) {
+    robj *o = objectCommandLookup(c,key);
+
+    if (!o) addReply(c, reply);
+    return o;
+}
+
+/* Object command allows to inspect the internals of an Redis Object.
+ * Usage: OBJECT <verb> ... arguments ... */
+void objectCommand(redisClient *c) {
+    robj *o;
+
+    if (!strcasecmp(c->argv[1]->ptr,"refcount") && c->argc == 3) {
+        if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.nullbulk))
+                == NULL) return;
+        addReplyLongLong(c,o->refcount);
+    } else if (!strcasecmp(c->argv[1]->ptr,"encoding") && c->argc == 3) {
+        if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.nullbulk))
+                == NULL) return;
+        addReplyBulkCString(c,strEncoding(o->encoding));
+    } else if (!strcasecmp(c->argv[1]->ptr,"idletime") && c->argc == 3) {
+        if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.nullbulk))
+                == NULL) return;
+        addReplyLongLong(c,estimateObjectIdleTime(o));
+    } else {
+        addReplyError(c,"Syntax error. Try OBJECT (refcount|encoding|idletime)");
+    }
+}
+

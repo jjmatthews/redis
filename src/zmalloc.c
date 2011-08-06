@@ -51,20 +51,22 @@
 #define calloc(count,size) tc_calloc(count,size)
 #define realloc(ptr,size) tc_realloc(ptr,size)
 #define free(ptr) tc_free(ptr)
+#elif defined(USE_JEMALLOC)
+#define malloc(size) je_malloc(size)
+#define calloc(count,size) je_calloc(count,size)
+#define realloc(ptr,size) je_realloc(ptr,size)
+#define free(ptr) je_free(ptr)
 #endif
 
 #define update_zmalloc_stat_alloc(__n,__size) do { \
     size_t _n = (__n); \
-    size_t _stat_slot = (__size < ZMALLOC_MAX_ALLOC_STAT) ? __size : ZMALLOC_MAX_ALLOC_STAT; \
     if (_n&(sizeof(long)-1)) _n += sizeof(long)-(_n&(sizeof(long)-1)); \
     if (zmalloc_thread_safe) { \
         pthread_mutex_lock(&used_memory_mutex);  \
         used_memory += _n; \
-        zmalloc_allocations[_stat_slot]++; \
         pthread_mutex_unlock(&used_memory_mutex); \
     } else { \
         used_memory += _n; \
-        zmalloc_allocations[_stat_slot]++; \
     } \
 } while(0)
 
@@ -83,8 +85,6 @@
 static size_t used_memory = 0;
 static int zmalloc_thread_safe = 0;
 pthread_mutex_t used_memory_mutex = PTHREAD_MUTEX_INITIALIZER;
-/* Note that malloc_allocations elements are initialized to zero by C */
-size_t zmalloc_allocations[ZMALLOC_MAX_ALLOC_STAT+1];
 
 static void zmalloc_oom(size_t size) {
     fprintf(stderr, "zmalloc: Out of memory trying to allocate %zu bytes\n",
@@ -98,7 +98,7 @@ void *zmalloc(size_t size) {
 
     if (!ptr) zmalloc_oom(size);
 #ifdef HAVE_MALLOC_SIZE
-    update_zmalloc_stat_alloc(redis_malloc_size(ptr),size);
+    update_zmalloc_stat_alloc(zmalloc_size(ptr),size);
     return ptr;
 #else
     *((size_t*)ptr) = size;
@@ -112,7 +112,7 @@ void *zcalloc(size_t size) {
 
     if (!ptr) zmalloc_oom(size);
 #ifdef HAVE_MALLOC_SIZE
-    update_zmalloc_stat_alloc(redis_malloc_size(ptr),size);
+    update_zmalloc_stat_alloc(zmalloc_size(ptr),size);
     return ptr;
 #else
     *((size_t*)ptr) = size;
@@ -130,12 +130,12 @@ void *zrealloc(void *ptr, size_t size) {
 
     if (ptr == NULL) return zmalloc(size);
 #ifdef HAVE_MALLOC_SIZE
-    oldsize = redis_malloc_size(ptr);
+    oldsize = zmalloc_size(ptr);
     newptr = realloc(ptr,size);
     if (!newptr) zmalloc_oom(size);
 
     update_zmalloc_stat_free(oldsize);
-    update_zmalloc_stat_alloc(redis_malloc_size(newptr),size);
+    update_zmalloc_stat_alloc(zmalloc_size(newptr),size);
     return newptr;
 #else
     realptr = (char*)ptr-PREFIX_SIZE;
@@ -158,7 +158,7 @@ void zfree(void *ptr) {
 
     if (ptr == NULL) return;
 #ifdef HAVE_MALLOC_SIZE
-    update_zmalloc_stat_free(redis_malloc_size(ptr));
+    update_zmalloc_stat_free(zmalloc_size(ptr));
     free(ptr);
 #else
     realptr = (char*)ptr-PREFIX_SIZE;
@@ -183,11 +183,6 @@ size_t zmalloc_used_memory(void) {
     um = used_memory;
     if (zmalloc_thread_safe) pthread_mutex_unlock(&used_memory_mutex);
     return um;
-}
-
-size_t zmalloc_allocations_for_size(size_t size) {
-    if (size > ZMALLOC_MAX_ALLOC_STAT) return 0;
-    return zmalloc_allocations[size];
 }
 
 void zmalloc_enable_thread_safeness(void) {

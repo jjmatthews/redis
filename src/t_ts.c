@@ -3,6 +3,23 @@
 #include <math.h>
 
 
+/* Find the first node having a score equal or greater than the specified one.
+* Returns NULL if there is no match. */
+zskiplistNode *zslFirstWithScore(zskiplist *zsl, double score) {
+    zskiplistNode *x;
+    int i;
+
+    x = zsl->header;
+    for (i = zsl->level-1; i >= 0; i--) {
+        while (x->level[i].forward && x->level[i].forward->score < score)
+            x = x->level[i].forward;
+    }
+    /* We may have multiple elements with the same score, what we need
+* is to find the element with both the right score and object. */
+    return x->level[0].forward;
+}
+
+
 /*-----------------------------------------------------------------------------
  * timeseries commands
  *----------------------------------------------------------------------------*/
@@ -224,10 +241,11 @@ void tsrangeGenericCommand(redisClient *c, int start, int end, int withtimes, in
     /* check if starting point is trivial, before searching
      * the element in log(N) time */
     if (reverse) {
-        ln = start == 0 ? ts->tail : zslistTypeGetElementByRank(ts, llen-start);
+        ln = start == 0 ? ts->tail :
+                            zslGetElementByRank(ts, llen-start);
     } else {
-        ln = start == 0 ?
-            ts->header->level[0].forward : zslistTypeGetElementByRank(ts, start+1);
+        ln = start == 0 ? ts->header->level[0].forward :
+                            zslGetElementByRank(ts, start+1);
     }
 
     /* Return the result in form of a multi-bulk reply */

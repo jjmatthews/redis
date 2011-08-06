@@ -231,6 +231,18 @@ void loadServerConfig(char *filename) {
                 err = "argument must be 'no', 'always' or 'everysec'";
                 goto loaderr;
             }
+        } else if (!strcasecmp(argv[0],"auto-aof-rewrite-percentage") &&
+                   argc == 2)
+        {
+            server.auto_aofrewrite_perc = atoi(argv[1]);
+            if (server.auto_aofrewrite_perc < 0) {
+                err = "Invalid negative percentage for AOF auto rewrite";
+                goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0],"auto-aof-rewrite-min-size") &&
+                   argc == 2)
+        {
+            server.auto_aofrewrite_min_size = memtoll(argv[1],NULL);
         } else if (!strcasecmp(argv[0],"requirepass") && argc == 2) {
             server.requirepass = zstrdup(argv[1]);
         } else if (!strcasecmp(argv[0],"pidfile") && argc == 2) {
@@ -239,18 +251,6 @@ void loadServerConfig(char *filename) {
         } else if (!strcasecmp(argv[0],"dbfilename") && argc == 2) {
             zfree(server.dbfilename);
             server.dbfilename = zstrdup(argv[1]);
-        } else if (!strcasecmp(argv[0],"diskstore-enabled") && argc == 2) {
-            if ((server.ds_enabled = yesnotoi(argv[1])) == -1) {
-                err = "argument must be 'yes' or 'no'"; goto loaderr;
-            }
-        } else if (!strcasecmp(argv[0],"diskstore-path") && argc == 2) {
-            sdsfree(server.ds_path);
-            server.ds_path = sdsnew(argv[1]);
-        } else if (!strcasecmp(argv[0],"cache-max-memory") && argc == 2) {
-            server.cache_max_memory = memtoll(argv[1],NULL);
-        } else if (!strcasecmp(argv[0],"cache-flush-delay") && argc == 2) {
-            server.cache_flush_delay = atoi(argv[1]);
-            if (server.cache_flush_delay < 0) server.cache_flush_delay = 0;
         } else if (!strcasecmp(argv[0],"hash-max-zipmap-entries") && argc == 2) {
             server.hash_max_zipmap_entries = memtoll(argv[1], NULL);
         } else if (!strcasecmp(argv[0],"hash-max-zipmap-value") && argc == 2) {
@@ -261,6 +261,10 @@ void loadServerConfig(char *filename) {
             server.list_max_ziplist_value = memtoll(argv[1], NULL);
         } else if (!strcasecmp(argv[0],"set-max-intset-entries") && argc == 2) {
             server.set_max_intset_entries = memtoll(argv[1], NULL);
+        } else if (!strcasecmp(argv[0],"zset-max-ziplist-entries") && argc == 2) {
+            server.zset_max_ziplist_entries = memtoll(argv[1], NULL);
+        } else if (!strcasecmp(argv[0],"zset-max-ziplist-value") && argc == 2) {
+            server.zset_max_ziplist_value = memtoll(argv[1], NULL);
         } else if (!strcasecmp(argv[0],"rename-command") && argc == 3) {
             struct redisCommand *cmd = lookupCommand(argv[1]);
             int retval;
@@ -285,6 +289,21 @@ void loadServerConfig(char *filename) {
                     err = "Target command name already exists"; goto loaderr;
                 }
             }
+        } else if (!strcasecmp(argv[0],"cluster-enabled") && argc == 2) {
+            if ((server.cluster_enabled = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0],"cluster-config-file") && argc == 2) {
+            zfree(server.cluster.configfile);
+            server.cluster.configfile = zstrdup(argv[1]);
+        } else if (!strcasecmp(argv[0],"lua-time-limit") && argc == 2) {
+            server.lua_time_limit = strtoll(argv[1],NULL,10);
+        } else if (!strcasecmp(argv[0],"slowlog-log-slower-than") &&
+                   argc == 2)
+        {
+            server.slowlog_log_slower_than = strtoll(argv[1],NULL,10);
+        } else if (!strcasecmp(argv[0],"slowlog-max-len") && argc == 2) {
+            server.slowlog_max_len = strtoll(argv[1],NULL,10);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -384,6 +403,12 @@ void configSetCommand(redisClient *c) {
                 }
             }
         }
+    } else if (!strcasecmp(c->argv[2]->ptr,"auto-aof-rewrite-percentage")) {
+        if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
+        server.auto_aofrewrite_perc = ll;
+    } else if (!strcasecmp(c->argv[2]->ptr,"auto-aof-rewrite-min-size")) {
+        if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
+        server.auto_aofrewrite_min_size = ll;
     } else if (!strcasecmp(c->argv[2]->ptr,"save")) {
         int vlen, j;
         sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
@@ -443,6 +468,21 @@ void configSetCommand(redisClient *c) {
     } else if (!strcasecmp(c->argv[2]->ptr,"set-max-intset-entries")) {
         if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
         server.set_max_intset_entries = ll;
+    } else if (!strcasecmp(c->argv[2]->ptr,"zset-max-ziplist-entries")) {
+        if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
+        server.zset_max_ziplist_entries = ll;
+    } else if (!strcasecmp(c->argv[2]->ptr,"zset-max-ziplist-value")) {
+        if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
+        server.zset_max_ziplist_value = ll;
+    } else if (!strcasecmp(c->argv[2]->ptr,"lua-time-limit")) {
+        if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
+        server.lua_time_limit = ll;
+    } else if (!strcasecmp(c->argv[2]->ptr,"slowlog-log-slower-than")) {
+        if (getLongLongFromObject(o,&ll) == REDIS_ERR) goto badfmt;
+        server.slowlog_log_slower_than = ll;
+    } else if (!strcasecmp(c->argv[2]->ptr,"slowlog-max-len")) {
+        if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
+        server.slowlog_max_len = (unsigned)ll;
     } else {
         addReplyErrorFormat(c,"Unsupported CONFIG parameter: %s",
             (char*)c->argv[2]->ptr);
@@ -564,6 +604,16 @@ void configGetCommand(redisClient *c) {
         sdsfree(buf);
         matches++;
     }
+    if (stringmatch(pattern,"auto-aof-rewrite-percentage",0)) {
+        addReplyBulkCString(c,"auto-aof-rewrite-percentage");
+        addReplyBulkLongLong(c,server.auto_aofrewrite_perc);
+        matches++;
+    }
+    if (stringmatch(pattern,"auto-aof-rewrite-min-size",0)) {
+        addReplyBulkCString(c,"auto-aof-rewrite-min-size");
+        addReplyBulkLongLong(c,server.auto_aofrewrite_min_size);
+        matches++;
+    }
     if (stringmatch(pattern,"slave-serve-stale-data",0)) {
         addReplyBulkCString(c,"slave-serve-stale-data");
         addReplyBulkCString(c,server.repl_serve_stale_data ? "yes" : "no");
@@ -592,6 +642,31 @@ void configGetCommand(redisClient *c) {
     if (stringmatch(pattern,"set-max-intset-entries",0)) {
         addReplyBulkCString(c,"set-max-intset-entries");
         addReplyBulkLongLong(c,server.set_max_intset_entries);
+        matches++;
+    }
+    if (stringmatch(pattern,"zset-max-ziplist-entries",0)) {
+        addReplyBulkCString(c,"zset-max-ziplist-entries");
+        addReplyBulkLongLong(c,server.zset_max_ziplist_entries);
+        matches++;
+    }
+    if (stringmatch(pattern,"zset-max-ziplist-value",0)) {
+        addReplyBulkCString(c,"zset-max-ziplist-value");
+        addReplyBulkLongLong(c,server.zset_max_ziplist_value);
+        matches++;
+    }
+    if (stringmatch(pattern,"lua-time-limit",0)) {
+        addReplyBulkCString(c,"lua-time-limit");
+        addReplyBulkLongLong(c,server.lua_time_limit);
+        matches++;
+    }
+    if (stringmatch(pattern,"slowlog-log-slower-than",0)) {
+        addReplyBulkCString(c,"slowlog-log-slower-than");
+        addReplyBulkLongLong(c,server.slowlog_log_slower_than);
+        matches++;
+    }
+    if (stringmatch(pattern,"slowlog-max-len",0)) {
+        addReplyBulkCString(c,"slowlog-max-len");
+        addReplyBulkLongLong(c,server.slowlog_max_len);
         matches++;
     }
     setDeferredMultiBulkLength(c,replylen,matches*2);
