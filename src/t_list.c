@@ -519,7 +519,12 @@ void lrangeCommand(redisClient *c) {
             p = ziplistNext(o->ptr,p);
         }
     } else if (o->encoding == REDIS_ENCODING_LINKEDLIST) {
-        listNode *ln = listIndex(o->ptr,start);
+        listNode *ln;
+
+        /* If we are nearest to the end of the list, reach the element
+         * starting from tail and going backward, as it is faster. */
+        if (start > llen/2) start -= llen;
+        ln = listIndex(o->ptr,start);
 
         while(rangelen--) {
             addReplyBulk(c,ln->value);
@@ -643,7 +648,7 @@ void lremCommand(redisClient *c) {
 void rpoplpushHandlePush(redisClient *origclient, redisClient *c, robj *dstkey, robj *dstobj, robj *value) {
     robj *aux;
 
-    if (!handleClientsWaitingListPush(c,dstkey,value)) {
+    if (!handleClientsWaitingListPush(origclient,dstkey,value)) {
         /* Create the list if the key does not exist */
         if (!dstobj) {
             dstobj = createZiplistObject();
@@ -653,10 +658,12 @@ void rpoplpushHandlePush(redisClient *origclient, redisClient *c, robj *dstkey, 
         }
         listTypePush(dstobj,value,REDIS_HEAD);
         /* If we are pushing as a result of LPUSH against a key
-         * watched by BLPOPLPUSH, we need to rewrite the command vector.
-         * But if this is called directly by RPOPLPUSH (either directly
+         * watched by BRPOPLPUSH, we need to rewrite the command vector
+         * as an LPUSH.
+         *
+         * If this is called directly by RPOPLPUSH (either directly
          * or via a BRPOPLPUSH where the popped list exists)
-         * we should replicate the BRPOPLPUSH command itself. */
+         * we should replicate the RPOPLPUSH command itself. */
         if (c != origclient) {
             aux = createStringObject("LPUSH",5);
             rewriteClientCommandVector(origclient,3,aux,dstkey,value);

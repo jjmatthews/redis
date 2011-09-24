@@ -30,6 +30,7 @@
 #include "redis.h"
 #include "t_ts.h" /* Timeseries header */
 #include "slowlog.h"
+#include "bio.h"
 
 #ifdef HAVE_BACKTRACE
 #include <execinfo.h>
@@ -58,7 +59,7 @@
 
 struct sharedObjectsStruct shared;
 
-/* Global vars that are actally used as constants. The following double
+/* Global vars that are actually used as constants. The following double
  * values are used for double on-disk serialization, and are initialized
  * at runtime to avoid strange compiler optimizations. */
 
@@ -585,6 +586,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * in objects at every object access, and accuracy is not needed.
      * To access a global var is faster than calling time(NULL) */
     server.unixtime = time(NULL);
+
     /* We have just 22 bits per object for LRU information.
      * So we use an (eventually wrapping) LRU clock with 10 seconds resolution.
      * 2^22 bits with 10 seconds resoluton is more or less 1.5 years.
@@ -695,7 +697,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
              server.auto_aofrewrite_perc &&
              server.appendonly_current_size > server.auto_aofrewrite_min_size)
          {
-            int base = server.auto_aofrewrite_base_size ?
+            long long base = server.auto_aofrewrite_base_size ?
                             server.auto_aofrewrite_base_size : 1;
             long long growth = (server.appendonly_current_size*100/base) - 100;
             if (growth >= server.auto_aofrewrite_perc) {
@@ -704,6 +706,11 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             }
          }
     }
+
+
+    /* If we postponed an AOF buffer flush, let's try to do it every time the
+     * cron function is called. */
+    if (server.aof_flush_postponed_start) flushAppendOnlyFile(0);
 
     /* Expire a few keys per cycle, only if this is a master.
      * On slaves we wait for DEL operations synthesized by the master
@@ -743,7 +750,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
 
     /* Write the AOF buffer on disk */
-    flushAppendOnlyFile();
+    flushAppendOnlyFile(0);
 }
 
 /* =========================== Server initialization ======================== */
@@ -830,6 +837,7 @@ void initServerConfig() {
     server.lastfsync = time(NULL);
     server.appendfd = -1;
     server.appendseldb = -1; /* Make sure the first time will not match */
+    server.aof_flush_postponed_start = 0;
     server.pidfile = zstrdup("/var/run/redis.pid");
     server.dbfilename = zstrdup("dump.rdb");
     server.appendfilename = zstrdup("appendonly.aof");
@@ -913,7 +921,8 @@ void initServer() {
     if (server.port != 0) {
         server.ipfd = anetTcpServer(server.neterr,server.port,server.bindaddr);
         if (server.ipfd == ANET_ERR) {
-            redisLog(REDIS_WARNING, "Opening port: %s", server.neterr);
+            redisLog(REDIS_WARNING, "Opening port %d: %s",
+                server.port, server.neterr);
             exit(1);
         }
     }
@@ -975,6 +984,7 @@ void initServer() {
     if (server.cluster_enabled) clusterInit();
     scriptingInit();
     slowlogInit();
+    bioInit();
     srand(time(NULL)^getpid());
 }
 
@@ -1032,9 +1042,9 @@ void call(redisClient *c) {
     slowlogPushEntryIfNeeded(c->argv,c->argc,duration);
     c->cmd->calls++;
 
-    if (server.appendonly && dirty)
+    if (server.appendonly && dirty > 0)
         feedAppendOnlyFile(c->cmd,c->db->id,c->argv,c->argc);
-    if ((dirty || c->cmd->flags & REDIS_CMD_FORCE_REPLICATION) &&
+    if ((dirty > 0 || c->cmd->flags & REDIS_CMD_FORCE_REPLICATION) &&
         listLength(server.slaves))
         replicationFeedSlaves(server.slaves,c->db->id,c->argv,c->argc);
     if (listLength(server.monitors))
@@ -1736,6 +1746,7 @@ void redisAsciiArt(void) {
 int main(int argc, char **argv) {
     long long start;
 
+    zmalloc_enable_thread_safeness();
     initServerConfig();
     if (argc == 2) {
         if (strcmp(argv[1], "-v") == 0 ||
@@ -1783,8 +1794,10 @@ static void *getMcontextEip(ucontext_t *uc) {
 #elif defined(__APPLE__) && !defined(MAC_OS_X_VERSION_10_6)
   #if __x86_64__
     return (void*) uc->uc_mcontext->__ss.__rip;
-  #else
+  #elif __i386__
     return (void*) uc->uc_mcontext->__ss.__eip;
+  #else
+    return (void*) uc->uc_mcontext->__ss.__srr0;
   #endif
 #elif defined(__APPLE__) && defined(MAC_OS_X_VERSION_10_6)
   #if defined(_STRUCT_X86_THREAD_STATE64) && !defined(__i386__)

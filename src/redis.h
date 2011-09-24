@@ -77,12 +77,6 @@
 #define REDIS_HASH 4
 #define REDIS_VMPOINTER 8
 
-/* Object types only used for persistence in .rdb files */
-#define REDIS_HASH_ZIPMAP 9
-#define REDIS_LIST_ZIPLIST 10
-#define REDIS_SET_INTSET 11
-#define REDIS_ZSET_ZIPLIST 12
-
 /* Objects encoding. Some kind of objects like Strings and Hashes can be
  * internally represented in multiple ways. The 'encoding' field of the object
  * is set to one of this fields for this object. */
@@ -559,6 +553,7 @@ struct redisServer {
     time_t lastfsync;
     int appendfd;
     int appendseldb;
+    time_t aof_flush_postponed_start;
     char *pidfile;
     pid_t bgsavechildpid;
     pid_t bgrewritechildpid;
@@ -612,30 +607,6 @@ struct redisServer {
     size_t zset_max_ziplist_entries;
     size_t zset_max_ziplist_value;
     time_t unixtime;    /* Unix time sampled every second. */
-    /* Virtual memory I/O threads stuff */
-    /* An I/O thread process an element taken from the io_jobs queue and
-     * put the result of the operation in the io_done list. While the
-     * job is being processed, it's put on io_processing queue. */
-    list *io_newjobs; /* List of VM I/O jobs yet to be processed */
-    list *io_processing; /* List of VM I/O jobs being processed */
-    list *io_processed; /* List of VM I/O jobs already processed */
-    list *io_ready_clients; /* Clients ready to be unblocked. All keys loaded */
-    pthread_mutex_t io_mutex; /* lock to access io_jobs/io_done/io_thread_job */
-    pthread_cond_t io_condvar; /* I/O threads conditional variable */
-    pthread_attr_t io_threads_attr; /* attributes for threads creation */
-    int io_active_threads; /* Number of running I/O threads */
-    int vm_max_threads; /* Max number of I/O threads running at the same time */
-    /* Our main thread is blocked on the event loop, locking for sockets ready
-     * to be read or written, so when a threaded I/O operation is ready to be
-     * processed by the main thread, the I/O thread will use a unix pipe to
-     * awake the main thread. The followings are the two pipe FDs. */
-    int io_ready_pipe_read;
-    int io_ready_pipe_write;
-    /* Virtual memory stats */
-    unsigned long long vm_stats_used_pages;
-    unsigned long long vm_stats_swapped_objects;
-    unsigned long long vm_stats_swapouts;
-    unsigned long long vm_stats_swapins;
     /* Pubsub */
     dict *pubsub_channels; /* Map channels to list of subscribed clients */
     list *pubsub_patterns; /* A list of pubsub_patterns */
@@ -859,11 +830,6 @@ unsigned long estimateObjectIdleTime(robj *o);
 int syncWrite(int fd, char *ptr, ssize_t size, int timeout);
 int syncRead(int fd, char *ptr, ssize_t size, int timeout);
 int syncReadLine(int fd, char *ptr, ssize_t size, int timeout);
-int fwriteBulkString(FILE *fp, char *s, unsigned long len);
-int fwriteBulkDouble(FILE *fp, double d);
-int fwriteBulkLongLong(FILE *fp, long long l);
-int fwriteBulkObject(FILE *fp, robj *obj);
-int fwriteBulkCount(FILE *fp, char prefix, int count);
 
 /* Replication */
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc);
@@ -877,24 +843,10 @@ void loadingProgress(off_t pos);
 void stopLoading(void);
 
 /* RDB persistence */
-int rdbLoad(char *filename);
-int rdbSaveBackground(char *filename);
-void rdbRemoveTempFile(pid_t childpid);
-int rdbSave(char *filename);
-int rdbSaveObject(FILE *fp, robj *o);
-off_t rdbSavedObjectLen(robj *o);
-off_t rdbSavedObjectPages(robj *o);
-robj *rdbLoadObject(int type, FILE *fp);
-void backgroundSaveDoneHandler(int exitcode, int bysignal);
-int rdbSaveKeyValuePair(FILE *fp, robj *key, robj *val, time_t expireitme, time_t now);
-int rdbLoadType(FILE *fp);
-time_t rdbLoadTime(FILE *fp);
-robj *rdbLoadStringObject(FILE *fp);
-int rdbSaveType(FILE *fp, unsigned char type);
-int rdbSaveLen(FILE *fp, uint32_t len);
+#include "rdb.h"
 
 /* AOF persistence */
-void flushAppendOnlyFile(void);
+void flushAppendOnlyFile(int force);
 void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int argc);
 void aofRemoveTempFile(pid_t childpid);
 int rewriteAppendOnlyFileBackground(void);
