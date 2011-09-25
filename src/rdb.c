@@ -547,15 +547,15 @@ int rdbSaveObject(rio *rdb, robj *o) {
         zskiplist *ts = o->ptr;
         zskiplistNode *ln;
         double score;
-        if (rdbSaveLen(fp,ts->length) == -1) return -1;
+        if ((n = rdbSaveLen(rdb,ts->length)) == -1) return -1;
         nwritten += n;
         ln = ts->header->level[0].forward;
     	while(ln != NULL) {
     		score  = ln->score;
     		robj *eleobj = ln->obj;
-    		if (rdbSaveStringObject(fp,eleobj) == -1) return -1;
+    		if ((n = rdbSaveStringObject(rdb,eleobj)) == -1) return -1;
     		nwritten += n;
-    		if (rdbSaveDoubleValue(fp,score) == -1) return -1;
+    		if ((n = rdbSaveDoubleValue(rdb,score)) == -1) return -1;
     		nwritten += n;
     		ln = ln->level[0].forward;
 		}
@@ -923,17 +923,17 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
                 redisPanic("Unknown encoding");
                 break;
         }
-    } else if (type == REDIS_TS) {
+    } else if (rdbtype == REDIS_TS) {
     	size_t zsetlen;
     	robj *value;
 		double score;
 
-		if ((zsetlen = rdbLoadLen(fp,NULL)) == REDIS_RDB_LENERR) return NULL;
+		if ((zsetlen = rdbLoadLen(rdb,NULL)) == REDIS_RDB_LENERR) return NULL;
 		o = createTsObject();
 		while(zsetlen--) {
-			if ((value = rdbLoadEncodedStringObject(fp)) == NULL) return NULL;
+			if ((value = rdbLoadEncodedStringObject(rdb)) == NULL) return NULL;
 			value = tryObjectEncoding(value);
-			if ((rdbLoadDoubleValue(fp,&score)) == -1) return NULL;
+			if ((rdbLoadDoubleValue(rdb,&score)) == -1) return NULL;
 			tsTypeSet(o, score, value);
 		}
     } else {
