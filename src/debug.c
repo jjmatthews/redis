@@ -80,7 +80,7 @@ void computeDatasetDigest(unsigned char *final) {
         redisDb *db = server.db+j;
 
         if (dictSize(db->dict) == 0) continue;
-        di = dictGetIterator(db->dict);
+        di = dictGetSafeIterator(db->dict);
 
         /* hash the DB id, so the same dataset moved in a different
          * DB will lead to a different digest */
@@ -100,7 +100,12 @@ void computeDatasetDigest(unsigned char *final) {
             mixDigest(digest,key,sdslen(key));
 
             /* Make sure the key is loaded if VM is active */
-            o = dictGetEntryVal(de);
+            o = lookupKeyRead(db,keyobj);
+            if (o == NULL) {
+                /* Key expired on lookup? Try the next one. */
+                decrRefCount(keyobj);
+                continue;
+            }
 
             aux = htonl(o->type);
             mixDigest(digest,&aux,sizeof(aux));

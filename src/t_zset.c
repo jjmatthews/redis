@@ -175,6 +175,7 @@ int zslDelete(zskiplist *zsl, double score, robj *obj) {
     return 0; /* not found */
 }
 
+
 static int zslValueGteMin(double value, zrangespec *spec) {
     return spec->minex ? (value > spec->min) : (value >= spec->min);
 }
@@ -1454,7 +1455,7 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
     setnum = atoi(c->argv[2]->ptr);
     if (setnum < 1) {
         addReplyError(c,
-            "at least 1 input key is needed for ZUNIONSTORE/ZINTERSTORE/DIFFSTORE");
+            "at least 1 input key is needed for ZUNIONSTORE/ZINTERSTORE/ZDIFFSTORE");
         return;
     }
 
@@ -1537,7 +1538,7 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
 
     dstobj = createZsetObject();
     dstzset = dstobj->ptr;
-    memset(&zval, 0, sizeof(zval));
+    memset(&zval,0,sizeof(zval));
 
     if (op == REDIS_OP_INTER) {
         /* Skip everything if the smallest input is empty. */
@@ -1616,7 +1617,7 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
                         maxelelen = sdslen(tmp->ptr);
             }
         }
-    } else if (op == REDIS_OP_DIFF) {
+    }  else if (op == REDIS_OP_DIFF) {
         for (i = 0; i < setnum; i++) {
             if (zuiLength(&src[i]) == 0)
                 continue;

@@ -1,5 +1,5 @@
 #include "redis.h"
-#include "lzf.h"    /* LZF compression library */
+#include "lzf.h" /* LZF compression library */
 #include "t_ts.h"
 
 #include <math.h>
@@ -11,9 +11,9 @@
 #include <sys/stat.h>
 
 /* Convenience wrapper around fwrite, that returns the number of bytes written
- * to the file instead of the number of objects (see fwrite(3)) and -1 in the
- * case of an error. It also supports a NULL *fp to skip writing altogether
- * instead of writing to /dev/null. */
+* to the file instead of the number of objects (see fwrite(3)) and -1 in the
+* case of an error. It also supports a NULL *fp to skip writing altogether
+* instead of writing to /dev/null. */
 static int rdbWriteRaw(FILE *fp, void *p, size_t len) {
     if (fp != NULL && fwrite(p,len,1,fp) == 0) return -1;
     return len;
@@ -56,10 +56,10 @@ int rdbSaveLen(FILE *fp, uint32_t len) {
 }
 
 /* Encode 'value' as an integer if possible (if integer will fit the
- * supported range). If the function sucessful encoded the integer
- * then the (up to 5 bytes) encoded representation is written in the
- * string pointed by 'enc' and the length is returned. Otherwise
- * 0 is returned. */
+* supported range). If the function sucessful encoded the integer
+* then the (up to 5 bytes) encoded representation is written in the
+* string pointed by 'enc' and the length is returned. Otherwise
+* 0 is returned. */
 int rdbEncodeInteger(long long value, unsigned char *enc) {
     /* Finally check if it fits in our ranges */
     if (value >= -(1<<7) && value <= (1<<7)-1) {
@@ -84,8 +84,8 @@ int rdbEncodeInteger(long long value, unsigned char *enc) {
 }
 
 /* String objects in the form "2391" "-100" without any space and with a
- * range of values that can fit in an 8, 16 or 32 bit signed value can be
- * encoded as integers to save space */
+* range of values that can fit in an 8, 16 or 32 bit signed value can be
+* encoded as integers to save space */
 int rdbTryIntegerEncoding(char *s, size_t len, unsigned char *enc) {
     long long value;
     char *endptr, buf[32];
@@ -96,7 +96,7 @@ int rdbTryIntegerEncoding(char *s, size_t len, unsigned char *enc) {
     ll2string(buf,32,value);
 
     /* If the number converted back into a string is not identical
-     * then it's not possible to encode the string as integer */
+* then it's not possible to encode the string as integer */
     if (strlen(buf) != len || memcmp(buf,s,len)) return 0;
 
     return rdbEncodeInteger(value,enc);
@@ -140,7 +140,7 @@ writeerr:
 }
 
 /* Save a string objet as [len][data] on disk. If the object is a string
- * representation of an integer value we try to save it in a special form */
+* representation of an integer value we try to save it in a special form */
 int rdbSaveRawString(FILE *fp, unsigned char *s, size_t len) {
     int enclen;
     int n, nwritten = 0;
@@ -155,7 +155,7 @@ int rdbSaveRawString(FILE *fp, unsigned char *s, size_t len) {
     }
 
     /* Try LZF compression - under 20 bytes it's unable to compress even
-     * aaaaaaaaaaaaaaaaaa so skip it */
+* aaaaaaaaaaaaaaaaaa so skip it */
     if (server.rdbcompression && len > 20) {
         n = rdbSaveLzfStringObject(fp,s,len);
         if (n == -1) return -1;
@@ -195,7 +195,7 @@ int rdbSaveLongLongAsStringObject(FILE *fp, long long value) {
 /* Like rdbSaveStringObjectRaw() but handle encoded objects */
 int rdbSaveStringObject(FILE *fp, robj *obj) {
     /* Avoid to decode the object, then encode it again, if the
-     * object is alrady integer encoded. */
+* object is alrady integer encoded. */
     if (obj->encoding == REDIS_ENCODING_INT) {
         return rdbSaveLongLongAsStringObject(fp,(long)obj->ptr);
     } else {
@@ -205,13 +205,13 @@ int rdbSaveStringObject(FILE *fp, robj *obj) {
 }
 
 /* Save a double value. Doubles are saved as strings prefixed by an unsigned
- * 8 bit integer specifing the length of the representation.
- * This 8 bit integer has special values in order to specify the following
- * conditions:
- * 253: not a number
- * 254: + inf
- * 255: - inf
- */
+* 8 bit integer specifing the length of the representation.
+* This 8 bit integer has special values in order to specify the following
+* conditions:
+* 253: not a number
+* 254: + inf
+* 255: - inf
+*/
 int rdbSaveDoubleValue(FILE *fp, double val) {
     unsigned char buf[128];
     int len;
@@ -225,14 +225,14 @@ int rdbSaveDoubleValue(FILE *fp, double val) {
     } else {
 #if (DBL_MANT_DIG >= 52) && (LLONG_MAX == 0x7fffffffffffffffLL)
         /* Check if the float is in a safe range to be casted into a
-         * long long. We are assuming that long long is 64 bit here.
-         * Also we are assuming that there are no implementations around where
-         * double has precision < 52 bit.
-         *
-         * Under this assumptions we test if a double is inside an interval
-         * where casting to long long is safe. Then using two castings we
-         * make sure the decimal part is zero. If all this is true we use
-         * integer printing function that is much faster. */
+* long long. We are assuming that long long is 64 bit here.
+* Also we are assuming that there are no implementations around where
+* double has precision < 52 bit.
+*
+* Under this assumptions we test if a double is inside an interval
+* where casting to long long is safe. Then using two castings we
+* make sure the decimal part is zero. If all this is true we use
+* integer printing function that is much faster. */
         double min = -4503599627370495; /* (2^52)-1 */
         double max = 4503599627370496; /* -(2^52) */
         if (val > min && val < max && val == ((double)((long long)val)))
@@ -246,7 +246,7 @@ int rdbSaveDoubleValue(FILE *fp, double val) {
     return rdbWriteRaw(fp,buf,len);
 }
 
-/* Save a Redis object. Returns -1 on error, 0 on success. */
+/* Save a Redis object. */
 int rdbSaveObject(FILE *fp, robj *o) {
     int n, nwritten = 0;
 
@@ -356,22 +356,22 @@ int rdbSaveObject(FILE *fp, robj *o) {
             dictReleaseIterator(di);
         }
     } else if (o->type == REDIS_TS) {
-    	/* Save the ts*/
+        /* Save the ts*/
         zskiplist *ts = o->ptr;
         zskiplistNode *ln;
         double score;
         if (rdbSaveLen(fp,ts->length) == -1) return -1;
         nwritten += n;
         ln = ts->header->level[0].forward;
-    	while(ln != NULL) {
-    		score  = ln->score;
-    		robj *eleobj = ln->obj;
-    		if (rdbSaveStringObject(fp,eleobj) == -1) return -1;
-    		nwritten += n;
-    		if (rdbSaveDoubleValue(fp,score) == -1) return -1;
-    		nwritten += n;
-    		ln = ln->level[0].forward;
-		}
+        while(ln != NULL) {
+            score  = ln->score;
+            robj *eleobj = ln->obj;
+            if ((n = rdbSaveStringObject(fp,eleobj)) == -1) return -1;
+            nwritten += n;
+            if ((n = rdbSaveDoubleValue(fp,score)) == -1) return -1;
+            nwritten += n;
+            ln = ln->level[0].forward;
+        }
     } else {
         redisPanic("Unknown object type");
     }
@@ -379,47 +379,33 @@ int rdbSaveObject(FILE *fp, robj *o) {
 }
 
 /* Return the length the object will have on disk if saved with
- * the rdbSaveObject() function. Currently we use a trick to get
- * this length with very little changes to the code. In the future
- * we could switch to a faster solution. */
+* the rdbSaveObject() function. Currently we use a trick to get
+* this length with very little changes to the code. In the future
+* we could switch to a faster solution. */
 off_t rdbSavedObjectLen(robj *o) {
     int len = rdbSaveObject(NULL,o);
     redisAssert(len != -1);
     return len;
 }
 
-/* Save a key-value pair, with expire time, type, key, value.
- * On error -1 is returned.
- * On success if the key was actaully saved 1 is returned, otherwise 0
- * is returned (the key was already expired). */
-int rdbSaveKeyValuePair(FILE *fp, robj *key, robj *val,
-                        time_t expiretime, time_t now)
-{
-    int vtype;
+/* Return the number of pages required to save this object in the swap file */
+off_t rdbSavedObjectPages(robj *o) {
+    off_t bytes = rdbSavedObjectLen(o);
+    return (bytes+(server.vm_page_size-1))/server.vm_page_size;
+}
 
-    /* Save the expire time */
-    if (expiretime != -1) {
-        /* If this key is already expired skip it */
-        if (expiretime < now) return 0;
-        if (rdbSaveType(fp,REDIS_EXPIRETIME) == -1) return -1;
-        if (rdbSaveTime(fp,expiretime) == -1) return -1;
-    }
-    /* Fix the object type if needed, to support saving zipmaps, ziplists,
-     * and intsets, directly as blobs of bytes: they are already serialized. */
-    vtype = val->type;
-    if (vtype == REDIS_HASH && val->encoding == REDIS_ENCODING_ZIPMAP)
-        vtype = REDIS_HASH_ZIPMAP;
-    else if (vtype == REDIS_LIST && val->encoding == REDIS_ENCODING_ZIPLIST)
-        vtype = REDIS_LIST_ZIPLIST;
-    else if (vtype == REDIS_SET && val->encoding == REDIS_ENCODING_INTSET)
-        vtype = REDIS_SET_INTSET;
-    else if (vtype == REDIS_ZSET && val->encoding == REDIS_ENCODING_ZIPLIST)
-        vtype = REDIS_ZSET_ZIPLIST;
-    /* Save type, key, value */
-    if (rdbSaveType(fp,vtype) == -1) return -1;
-    if (rdbSaveStringObject(fp,key) == -1) return -1;
-    if (rdbSaveObject(fp,val) == -1) return -1;
-    return 1;
+int getObjectSaveType(robj *o) {
+    /* Fix the type id for specially encoded data types */
+    if (o->type == REDIS_HASH && o->encoding == REDIS_ENCODING_ZIPMAP)
+        return REDIS_HASH_ZIPMAP;
+    else if (o->type == REDIS_LIST && o->encoding == REDIS_ENCODING_ZIPLIST)
+        return REDIS_LIST_ZIPLIST;
+    else if (o->type == REDIS_SET && o->encoding == REDIS_ENCODING_INTSET)
+        return REDIS_SET_INTSET;
+    else if (o->type == REDIS_ZSET && o->encoding == REDIS_ENCODING_ZIPLIST)
+        return REDIS_ZSET_ZIPLIST;
+    else
+        return o->type;
 }
 
 /* Save the DB on disk. Return REDIS_ERR on error, REDIS_OK on success */
@@ -431,11 +417,16 @@ int rdbSave(char *filename) {
     int j;
     time_t now = time(NULL);
 
+    /* Wait for I/O therads to terminate, just in case this is a
+* foreground-saving, to avoid seeking the swap file descriptor at the
+* same time. */
+    if (server.vm_enabled)
+        waitEmptyIOJobsQueue();
+
     snprintf(tmpfile,256,"temp-%d.rdb", (int) getpid());
     fp = fopen(tmpfile,"w");
     if (!fp) {
-        redisLog(REDIS_WARNING, "Failed opening .rdb for saving: %s",
-            strerror(errno));
+        redisLog(REDIS_WARNING, "Failed saving the DB: %s", strerror(errno));
         return REDIS_ERR;
     }
     if (fwrite("REDIS0002",9,1,fp) == 0) goto werr;
@@ -457,11 +448,41 @@ int rdbSave(char *filename) {
         while((de = dictNext(di)) != NULL) {
             sds keystr = dictGetEntryKey(de);
             robj key, *o = dictGetEntryVal(de);
-            time_t expire;
-            
+            time_t expiretime;
+
             initStaticStringObject(key,keystr);
-            expire = getExpire(db,&key);
-            if (rdbSaveKeyValuePair(fp,&key,o,expire,now) == -1) goto werr;
+            expiretime = getExpire(db,&key);
+
+            /* Save the expire time */
+            if (expiretime != -1) {
+                /* If this key is already expired skip it */
+                if (expiretime < now) continue;
+                if (rdbSaveType(fp,REDIS_EXPIRETIME) == -1) goto werr;
+                if (rdbSaveTime(fp,expiretime) == -1) goto werr;
+            }
+            /* Save the key and associated value. This requires special
+* handling if the value is swapped out. */
+            if (!server.vm_enabled || o->storage == REDIS_VM_MEMORY ||
+                                      o->storage == REDIS_VM_SWAPPING) {
+                int otype = getObjectSaveType(o);
+
+                /* Save type, key, value */
+                if (rdbSaveType(fp,otype) == -1) goto werr;
+                if (rdbSaveStringObject(fp,&key) == -1) goto werr;
+                if (rdbSaveObject(fp,o) == -1) goto werr;
+            } else {
+                /* REDIS_VM_SWAPPED or REDIS_VM_LOADING */
+                robj *po;
+                /* Get a preview of the object in memory */
+                po = vmPreviewObject(o);
+                /* Save type, key, value */
+                if (rdbSaveType(fp,getObjectSaveType(po)) == -1)
+                    goto werr;
+                if (rdbSaveStringObject(fp,&key) == -1) goto werr;
+                if (rdbSaveObject(fp,po) == -1) goto werr;
+                /* Remove the loaded object from memory */
+                decrRefCount(po);
+            }
         }
         dictReleaseIterator(di);
     }
@@ -474,7 +495,7 @@ int rdbSave(char *filename) {
     fclose(fp);
 
     /* Use RENAME to make sure the DB file is changed atomically only
-     * if the generate DB file is ok. */
+* if the generate DB file is ok. */
     if (rename(tmpfile,filename) == -1) {
         redisLog(REDIS_WARNING,"Error moving temp DB file on the final destination: %s", strerror(errno));
         unlink(tmpfile);
@@ -498,18 +519,19 @@ int rdbSaveBackground(char *filename) {
     long long start;
 
     if (server.bgsavechildpid != -1) return REDIS_ERR;
-
+    if (server.vm_enabled) waitEmptyIOJobsQueue();
     server.dirty_before_bgsave = server.dirty;
-
     start = ustime();
     if ((childpid = fork()) == 0) {
-        int retval;
-
         /* Child */
+        if (server.vm_enabled) vmReopenSwapFile();
         if (server.ipfd > 0) close(server.ipfd);
         if (server.sofd > 0) close(server.sofd);
-        retval = rdbSave(filename);
-        _exit((retval == REDIS_OK) ? 0 : 1);
+        if (rdbSave(filename) == REDIS_OK) {
+            _exit(0);
+        } else {
+            _exit(1);
+        }
     } else {
         /* Parent */
         server.stat_fork_time = ustime()-start;
@@ -546,10 +568,10 @@ time_t rdbLoadTime(FILE *fp) {
 }
 
 /* Load an encoded length from the DB, see the REDIS_RDB_* defines on the top
- * of this file for a description of how this are stored on disk.
- *
- * isencoded is set to 1 if the readed length is not actually a length but
- * an "encoding type", check the above comments for more info */
+* of this file for a description of how this are stored on disk.
+*
+* isencoded is set to 1 if the readed length is not actually a length but
+* an "encoding type", check the above comments for more info */
 uint32_t rdbLoadLen(FILE *fp, int *isencoded) {
     unsigned char buf[2];
     uint32_t len;
@@ -577,9 +599,9 @@ uint32_t rdbLoadLen(FILE *fp, int *isencoded) {
 }
 
 /* Load an integer-encoded object from file 'fp', with the specified
- * encoding type 'enctype'. If encode is true the function may return
- * an integer-encoded object as reply, otherwise the returned object
- * will always be encoded as a raw string. */
+* encoding type 'enctype'. If encode is true the function may return
+* an integer-encoded object as reply, otherwise the returned object
+* will always be encoded as a raw string. */
 robj *rdbLoadIntegerObject(FILE *fp, int enctype, int encode) {
     unsigned char enc[4];
     long long val;
@@ -681,7 +703,7 @@ int rdbLoadDoubleValue(FILE *fp, double *val) {
 }
 
 /* Load a Redis object of the specified type from the specified file.
- * On success a newly allocated object is returned, otherwise NULL. */
+* On success a newly allocated object is returned, otherwise NULL. */
 robj *rdbLoadObject(int type, FILE *fp) {
     robj *o, *ele, *dec;
     size_t len;
@@ -708,7 +730,7 @@ robj *rdbLoadObject(int type, FILE *fp) {
             if ((ele = rdbLoadEncodedStringObject(fp)) == NULL) return NULL;
 
             /* If we are using a ziplist and the value is too big, convert
-             * the object to a real list. */
+* the object to a real list. */
             if (o->encoding == REDIS_ENCODING_ZIPLIST &&
                 ele->encoding == REDIS_ENCODING_RAW &&
                 sdslen(ele->ptr) > server.list_max_ziplist_value)
@@ -732,7 +754,7 @@ robj *rdbLoadObject(int type, FILE *fp) {
         if (len > server.set_max_intset_entries) {
             o = createSetObject();
             /* It's faster to expand the dict to the right size asap in order
-             * to avoid rehashing */
+* to avoid rehashing */
             if (len > DICT_HT_INITIAL_SIZE)
                 dictExpand(o->ptr,len);
         } else {
@@ -756,7 +778,7 @@ robj *rdbLoadObject(int type, FILE *fp) {
             }
 
             /* This will also be called when the set was just converted
-             * to regular hashtable encoded set */
+* to regular hashtable encoded set */
             if (o->encoding == REDIS_ENCODING_HT) {
                 dictAdd((dict*)o->ptr,ele,NULL);
             } else {
@@ -806,14 +828,14 @@ robj *rdbLoadObject(int type, FILE *fp) {
         if (hashlen > server.hash_max_zipmap_entries)
             convertToRealHash(o);
         /* Load every key/value, then set it into the zipmap or hash
-         * table, as needed. */
+* table, as needed. */
         while(hashlen--) {
             robj *key, *val;
 
             if ((key = rdbLoadEncodedStringObject(fp)) == NULL) return NULL;
             if ((val = rdbLoadEncodedStringObject(fp)) == NULL) return NULL;
             /* If we are using a zipmap and there are too big values
-             * the object is converted to real hash table encoding. */
+* the object is converted to real hash table encoding. */
             if (o->encoding != REDIS_ENCODING_HT &&
                ((key->encoding == REDIS_ENCODING_RAW &&
                 sdslen(key->ptr) > server.hash_max_zipmap_value) ||
@@ -857,11 +879,11 @@ robj *rdbLoadObject(int type, FILE *fp) {
         decrRefCount(aux);
 
         /* Fix the object encoding, and make sure to convert the encoded
-         * data type into the base type if accordingly to the current
-         * configuration there are too many elements in the encoded data
-         * type. Note that we only check the length and not max element
-         * size as this is an O(N) scan. Eventually everything will get
-         * converted. */
+* data type into the base type if accordingly to the current
+* configuration there are too many elements in the encoded data
+* type. Note that we only check the length and not max element
+* size as this is an O(N) scan. Eventually everything will get
+* converted. */
         switch(type) {
             case REDIS_HASH_ZIPMAP:
                 o->type = REDIS_HASH;
@@ -891,19 +913,19 @@ robj *rdbLoadObject(int type, FILE *fp) {
                 redisPanic("Unknown encoding");
                 break;
         }
-    } else if (type == REDIS_TS) {
-    	size_t zsetlen;
-    	robj *value;
-		double score;
+    }  else if (type == REDIS_TS) {
+        size_t zsetlen;
+        robj *value;
+        double score;
 
-		if ((zsetlen = rdbLoadLen(fp,NULL)) == REDIS_RDB_LENERR) return NULL;
-		o = createTsObject();
-		while(zsetlen--) {
-			if ((value = rdbLoadEncodedStringObject(fp)) == NULL) return NULL;
-			value = tryObjectEncoding(value);
-			if ((rdbLoadDoubleValue(fp,&score)) == -1) return NULL;
-			tsTypeSet(o, score, value);
-		}
+        if ((zsetlen = rdbLoadLen(fp,NULL)) == REDIS_RDB_LENERR) return NULL;
+        o = createTsObject();
+        while(zsetlen--) {
+            if ((value = rdbLoadEncodedStringObject(fp)) == NULL) return NULL;
+            value = tryObjectEncoding(value);
+            if ((rdbLoadDoubleValue(fp,&score)) == -1) return NULL;
+            tsTypeSet(o, score, value);
+        }
     } else {
         redisPanic("Unknown object type");
     }
@@ -911,7 +933,7 @@ robj *rdbLoadObject(int type, FILE *fp) {
 }
 
 /* Mark that we are loading in the global state and setup the fields
- * needed to provide loading stats. */
+* needed to provide loading stats. */
 void startLoading(FILE *fp) {
     struct stat sb;
 
@@ -939,6 +961,7 @@ int rdbLoad(char *filename) {
     FILE *fp;
     uint32_t dbid;
     int type, rdbver;
+    int swap_all_values = 0;
     redisDb *db = server.db+0;
     char buf[1024];
     time_t expiretime, now = time(NULL);
@@ -963,6 +986,8 @@ int rdbLoad(char *filename) {
     startLoading(fp);
     while(1) {
         robj *key, *val;
+        int force_swapout;
+
         expiretime = -1;
 
         /* Serve the clients from time to time */
@@ -1006,7 +1031,44 @@ int rdbLoad(char *filename) {
         /* Set the expire time if needed */
         if (expiretime != -1) setExpire(db,key,expiretime);
 
+        /* Handle swapping while loading big datasets when VM is on */
+
+        /* If we detecter we are hopeless about fitting something in memory
+* we just swap every new key on disk. Directly...
+* Note that's important to check for this condition before resorting
+* to random sampling, otherwise we may try to swap already
+* swapped keys. */
+        if (swap_all_values) {
+            dictEntry *de = dictFind(db->dict,key->ptr);
+
+            /* de may be NULL since the key already expired */
+            if (de) {
+                vmpointer *vp;
+                val = dictGetEntryVal(de);
+
+                if (val->refcount == 1 &&
+                    (vp = vmSwapObjectBlocking(val)) != NULL)
+                    dictGetEntryVal(de) = vp;
+            }
+            decrRefCount(key);
+            continue;
+        }
         decrRefCount(key);
+
+        /* Flush data on disk once 32 MB of additional RAM are used... */
+        force_swapout = 0;
+        if ((zmalloc_used_memory() - server.vm_max_memory) > 1024*1024*32)
+            force_swapout = 1;
+
+        /* If we have still some hope of having some value fitting memory
+* then we try random sampling. */
+        if (!swap_all_values && server.vm_enabled && force_swapout) {
+            while (zmalloc_used_memory() > server.vm_max_memory) {
+                if (vmSwapOneObjectBlocking() == REDIS_ERR) break;
+            }
+            if (zmalloc_used_memory() > server.vm_max_memory)
+                swap_all_values = 1; /* We are already using too much mem */
+        }
     }
     fclose(fp);
     stopLoading();
@@ -1019,7 +1081,10 @@ eoferr: /* unexpected end of file is handled here with a fatal exit */
 }
 
 /* A background saving child (BGSAVE) terminated its work. Handle this. */
-void backgroundSaveDoneHandler(int exitcode, int bysignal) {
+void backgroundSaveDoneHandler(int statloc) {
+    int exitcode = WEXITSTATUS(statloc);
+    int bysignal = WIFSIGNALED(statloc);
+
     if (!bysignal && exitcode == 0) {
         redisLog(REDIS_NOTICE,
             "Background saving terminated with success");
@@ -1029,35 +1094,12 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
         redisLog(REDIS_WARNING, "Background saving error");
     } else {
         redisLog(REDIS_WARNING,
-            "Background saving terminated by signal %d", bysignal);
+            "Background saving terminated by signal %d", WTERMSIG(statloc));
         rdbRemoveTempFile(server.bgsavechildpid);
     }
     server.bgsavechildpid = -1;
     /* Possibly there are slaves waiting for a BGSAVE in order to be served
-     * (the first stage of SYNC is a bulk transfer of dump.rdb) */
+* (the first stage of SYNC is a bulk transfer of dump.rdb) */
     updateSlavesWaitingBgsave(exitcode == 0 ? REDIS_OK : REDIS_ERR);
 }
 
-void saveCommand(redisClient *c) {
-    if (server.bgsavechildpid != -1) {
-        addReplyError(c,"Background save already in progress");
-        return;
-    }
-    if (rdbSave(server.dbfilename) == REDIS_OK) {
-        addReply(c,shared.ok);
-    } else {
-        addReply(c,shared.err);
-    }
-}
-
-void bgsaveCommand(redisClient *c) {
-    if (server.bgsavechildpid != -1) {
-        addReplyError(c,"Background save already in progress");
-    } else if (server.bgrewritechildpid != -1) {
-        addReplyError(c,"Can't BGSAVE while AOF log rewriting is in progress");
-    } else if (rdbSaveBackground(server.dbfilename) == REDIS_OK) {
-        addReplyStatus(c,"Background saving started");
-    } else {
-        addReply(c,shared.err);
-    }
-}

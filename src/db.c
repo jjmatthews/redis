@@ -3,34 +3,9 @@
 
 #include <signal.h>
 
-void SlotToKeyAdd(robj *key);
-void SlotToKeyDel(robj *key);
-
 /*-----------------------------------------------------------------------------
- * C-level DB API
- *----------------------------------------------------------------------------*/
-
-/* Important notes on lookup and disk store.
- *
- * When disk store is enabled on lookup we can have different cases.
- *
- * a) The key is in memory:
- *    - If the key is not in IO_SAVEINPROG state we can access it.
- *      As if it's just IO_SAVE this means we have the key in the IO queue
- *      but can't be accessed by the IO thread (it requires to be
- *      translated into an IO Job by the cache cron function.)
- *    - If the key is in IO_SAVEINPROG we can't touch the key and have
- *      to blocking wait completion of operations.
- * b) The key is not in memory:
- *    - If it's marked as non existing on disk as well (negative cache)
- *      we don't need to perform the disk access.
- *    - if the key MAY EXIST, but is not in memory, and it is marked as IO_SAVE
- *      then the key can only be a deleted one. As IO_SAVE keys are never
- *      evicted (dirty state), so the only possibility is that key was deleted.
- *    - if the key MAY EXIST we need to blocking load it.
- *      We check that the key is not in IO_SAVEINPROG state before accessing
- *      the disk object. If it is in this state, we wait.
- */
+* C-level DB API
+*----------------------------------------------------------------------------*/
 
 robj *lookupKey(redisDb *db, robj *key) {
     dictEntry *de = dictFind(db->dict,key->ptr);
@@ -38,10 +13,31 @@ robj *lookupKey(redisDb *db, robj *key) {
         robj *val = dictGetEntryVal(de);
 
         /* Update the access time for the aging algorithm.
-         * Don't do it if we have a saving child, as this will trigger
-         * a copy on write madness. */
+* Don't do it if we have a saving child, as this will trigger
+* a copy on write madness. */
         if (server.bgsavechildpid == -1 && server.bgrewritechildpid == -1)
             val->lru = server.lruclock;
+
+        if (server.vm_enabled) {
+            if (val->storage == REDIS_VM_MEMORY ||
+                val->storage == REDIS_VM_SWAPPING)
+            {
+                /* If we were swapping the object out, cancel the operation */
+                if (val->storage == REDIS_VM_SWAPPING)
+                    vmCancelThreadedIOJob(val);
+            } else {
+                int notify = (val->storage == REDIS_VM_LOADING);
+
+                /* Our value was swapped on disk. Bring it at home. */
+                redisAssert(val->type == REDIS_VMPOINTER);
+                val = vmLoadObject(val);
+                dictGetEntryVal(de) = val;
+
+                /* Clients blocked by the VM subsystem may be waiting for
+* this key... */
+                if (notify) handleClientsBlockedOnSwappedKey(db,key);
+            }
+        }
         server.stat_keyspace_hits++;
         return val;
     } else {
@@ -73,22 +69,20 @@ robj *lookupKeyWriteOrReply(redisClient *c, robj *key, robj *reply) {
 }
 
 /* Add the key to the DB. It's up to the caller to increment the reference
- * counte of the value if needed.
- *
- * The program is aborted if the key already exists. */
+* counte of the value if needed.
+*
+* The program is aborted if the key already exists. */
 void dbAdd(redisDb *db, robj *key, robj *val) {
     sds copy = sdsdup(key->ptr);
     int retval = dictAdd(db->dict, copy, val);
-
     redisAssert(retval == REDIS_OK);
-    if (server.cluster_enabled) SlotToKeyAdd(key);
- }
+}
 
 /* Overwrite an existing key with a new value. Incrementing the reference
- * count of the new value is up to the caller.
- * This function does not modify the expire time of the existing key.
- *
- * The program is aborted if the key was not already present. */
+* count of the new value is up to the caller.
+* This function does not modify the expire time of the existing key.
+*
+* The program is aborted if the key was not already present. */
 void dbOverwrite(redisDb *db, robj *key, robj *val) {
     struct dictEntry *de = dictFind(db->dict,key->ptr);
     
@@ -97,11 +91,11 @@ void dbOverwrite(redisDb *db, robj *key, robj *val) {
 }
 
 /* High level Set operation. This function can be used in order to set
- * a key, whatever it was existing or not, to a new object.
- *
- * 1) The ref count of the value object is incremented.
- * 2) clients WATCHing for the destination key notified.
- * 3) The expire time of the key is reset (the key is made persistent). */
+* a key, whatever it was existing or not, to a new object.
+*
+* 1) The ref count of the value object is incremented.
+* 2) clients WATCHing for the destination key notified.
+* 3) The expire time of the key is reset (the key is made persistent). */
 void setKey(redisDb *db, robj *key, robj *val) {
     if (lookupKeyWrite(db,key) == NULL) {
         dbAdd(db,key,val);
@@ -110,7 +104,7 @@ void setKey(redisDb *db, robj *key, robj *val) {
     }
     incrRefCount(val);
     removeExpire(db,key);
-    touchWatchedKey(db,key);
+    signalModifiedKey(db,key);
 }
 
 int dbExists(redisDb *db, robj *key) {
@@ -118,9 +112,9 @@ int dbExists(redisDb *db, robj *key) {
 }
 
 /* Return a random key, in form of a Redis object.
- * If there are no keys, NULL is returned.
- *
- * The function makes sure to return keys not already expired. */
+* If there are no keys, NULL is returned.
+*
+* The function makes sure to return keys not already expired. */
 robj *dbRandomKey(redisDb *db) {
     struct dictEntry *de;
 
@@ -145,19 +139,18 @@ robj *dbRandomKey(redisDb *db) {
 
 /* Delete a key, value, and associated expiration entry if any, from the DB */
 int dbDelete(redisDb *db, robj *key) {
+    /* If VM is enabled make sure to awake waiting clients for this key:
+* deleting the key will kill the I/O thread bringing the key from swap
+* to memory, so the client will never be notified and unblocked if we
+* don't do it now. */
+    if (server.vm_enabled) handleClientsBlockedOnSwappedKey(db,key);
     /* Deleting an entry from the expires dict will not free the sds of
-     * the key, because it is shared with the main dictionary. */
+* the key, because it is shared with the main dictionary. */
     if (dictSize(db->expires) > 0) dictDelete(db->expires,key->ptr);
-    if (dictDelete(db->dict,key->ptr) == DICT_OK) {
-        if (server.cluster_enabled) SlotToKeyDel(key);
-        return 1;
-    } else {
-        return 0;
-    }
+    return dictDelete(db->dict,key->ptr) == DICT_OK;
 }
 
-/* Empty the whole database.
- * If diskstore is enabled this function will just flush the in-memory cache. */
+/* Empty the whole database */
 long long emptyDb() {
     int j;
     long long removed = 0;
@@ -178,13 +171,13 @@ int selectDb(redisClient *c, int id) {
 }
 
 /*-----------------------------------------------------------------------------
- * Hooks for key space changes.
- *
- * Every time a key in the database is modified the function
- * signalModifiedKey() is called.
- *
- * Every time a DB is flushed the function signalFlushDb() is called.
- *----------------------------------------------------------------------------*/
+* Hooks for key space changes.
+*
+* Every time a key in the database is modified the function
+* signalModifiedKey() is called.
+*
+* Every time a DB is flushed the function signalFlushDb() is called.
+*----------------------------------------------------------------------------*/
 
 void signalModifiedKey(redisDb *db, robj *key) {
     touchWatchedKey(db,key);
@@ -195,8 +188,8 @@ void signalFlushedDb(int dbid) {
 }
 
 /*-----------------------------------------------------------------------------
- * Type agnostic commands operating on the key space
- *----------------------------------------------------------------------------*/
+* Type agnostic commands operating on the key space
+*----------------------------------------------------------------------------*/
 
 void flushdbCommand(redisClient *c) {
     server.dirty += dictSize(c->db->dict);
@@ -243,10 +236,6 @@ void existsCommand(redisClient *c) {
 void selectCommand(redisClient *c) {
     int id = atoi(c->argv[1]->ptr);
 
-    if (server.cluster_enabled && id != 0) {
-        addReplyError(c,"SELECT is not allowed in cluster mode");
-        return;
-    }
     if (selectDb(c,id) == REDIS_ERR) {
         addReplyError(c,"invalid DB index");
     } else {
@@ -322,6 +311,30 @@ void typeCommand(redisClient *c) {
     addReplyStatus(c,type);
 }
 
+void saveCommand(redisClient *c) {
+    if (server.bgsavechildpid != -1) {
+        addReplyError(c,"Background save already in progress");
+        return;
+    }
+    if (rdbSave(server.dbfilename) == REDIS_OK) {
+        addReply(c,shared.ok);
+    } else {
+        addReply(c,shared.err);
+    }
+}
+
+void bgsaveCommand(redisClient *c) {
+    if (server.bgsavechildpid != -1) {
+        addReplyError(c,"Background save already in progress");
+    } else if (server.bgrewritechildpid != -1) {
+        addReplyError(c,"Can't BGSAVE while AOF log rewriting is in progress");
+    } else if (rdbSaveBackground(server.dbfilename) == REDIS_OK) {
+        addReplyStatus(c,"Background saving started");
+    } else {
+        addReply(c,shared.err);
+    }
+}
+
 void shutdownCommand(redisClient *c) {
     if (prepareForShutdown() == REDIS_OK)
         exit(0);
@@ -371,11 +384,6 @@ void moveCommand(redisClient *c) {
     redisDb *src, *dst;
     int srcid;
 
-    if (server.cluster_enabled) {
-        addReplyError(c,"MOVE is not allowed in cluster mode");
-        return;
-    }
-
     /* Obtain source and target DB pointers */
     src = c->db;
     srcid = c->db->id;
@@ -387,7 +395,7 @@ void moveCommand(redisClient *c) {
     selectDb(c,srcid); /* Back to the source DB */
 
     /* If the user is moving using as target the same
-     * DB as the source DB it is probably an error. */
+* DB as the source DB it is probably an error. */
     if (src == dst) {
         addReply(c,shared.sameobjecterr);
         return;
@@ -415,12 +423,12 @@ void moveCommand(redisClient *c) {
 }
 
 /*-----------------------------------------------------------------------------
- * Expires API
- *----------------------------------------------------------------------------*/
+* Expires API
+*----------------------------------------------------------------------------*/
 
 int removeExpire(redisDb *db, robj *key) {
     /* An expire may only be removed if there is a corresponding entry in the
-     * main dict. Otherwise, the key will never be freed. */
+* main dict. Otherwise, the key will never be freed. */
     redisAssert(dictFind(db->dict,key->ptr) != NULL);
     return dictDelete(db->expires,key->ptr) == DICT_OK;
 }
@@ -435,7 +443,7 @@ void setExpire(redisDb *db, robj *key, time_t when) {
 }
 
 /* Return the expire time of the specified key, or -1 if no expire
- * is associated with this key (i.e. the key is non volatile) */
+* is associated with this key (i.e. the key is non volatile) */
 time_t getExpire(redisDb *db, robj *key) {
     dictEntry *de;
 
@@ -444,19 +452,19 @@ time_t getExpire(redisDb *db, robj *key) {
        (de = dictFind(db->expires,key->ptr)) == NULL) return -1;
 
     /* The entry was found in the expire dict, this means it should also
-     * be present in the main dict (safety check). */
+* be present in the main dict (safety check). */
     redisAssert(dictFind(db->dict,key->ptr) != NULL);
     return (time_t) dictGetEntryVal(de);
 }
 
 /* Propagate expires into slaves and the AOF file.
- * When a key expires in the master, a DEL operation for this key is sent
- * to all the slaves and the AOF file if enabled.
- *
- * This way the key expiry is centralized in one place, and since both
- * AOF and the master->slave link guarantee operation ordering, everything
- * will be consistent even if we allow write operations against expiring
- * keys. */
+* When a key expires in the master, a DEL operation for this key is sent
+* to all the slaves and the AOF file if enabled.
+*
+* This way the key expiry is centralized in one place, and since both
+* AOF and the master->slave link guarantee operation ordering, everything
+* will be consistent even if we allow write operations against expiring
+* keys. */
 void propagateExpire(redisDb *db, robj *key) {
     robj *argv[2];
 
@@ -482,12 +490,12 @@ int expireIfNeeded(redisDb *db, robj *key) {
     if (server.loading) return 0;
 
     /* If we are running in the context of a slave, return ASAP:
-     * the slave key expiration is controlled by the master that will
-     * send us synthesized DEL operations for expired keys.
-     *
-     * Still we try to return the right information to the caller, 
-     * that is, 0 if we think the key should be still valid, 1 if
-     * we think the key is expired at this time. */
+* the slave key expiration is controlled by the master that will
+* send us synthesized DEL operations for expired keys.
+*
+* Still we try to return the right information to the caller,
+* that is, 0 if we think the key should be still valid, 1 if
+* we think the key is expired at this time. */
     if (server.masterhost != NULL) {
         return time(NULL) > when;
     }
@@ -502,8 +510,8 @@ int expireIfNeeded(redisDb *db, robj *key) {
 }
 
 /*-----------------------------------------------------------------------------
- * Expires Commands
- *----------------------------------------------------------------------------*/
+* Expires Commands
+*----------------------------------------------------------------------------*/
 
 void expireGenericCommand(redisClient *c, robj *key, robj *param, long offset) {
     dictEntry *de;
@@ -519,11 +527,11 @@ void expireGenericCommand(redisClient *c, robj *key, robj *param, long offset) {
         return;
     }
     /* EXPIRE with negative TTL, or EXPIREAT with a timestamp into the past
-     * should never be executed as a DEL when load the AOF or in the context
-     * of a slave instance.
-     *
-     * Instead we take the other branch of the IF statement setting an expire
-     * (possibly in the past) and wait for an explicit DEL from the master. */
+* should never be executed as a DEL when load the AOF or in the context
+* of a slave instance.
+*
+* Instead we take the other branch of the IF statement setting an expire
+* (possibly in the past) and wait for an explicit DEL from the master. */
     if (seconds <= 0 && !server.loading && !server.masterhost) {
         robj *aux;
 
@@ -582,107 +590,4 @@ void persistCommand(redisClient *c) {
     }
 }
 
-/* -----------------------------------------------------------------------------
- * API to get key arguments from commands
- * ---------------------------------------------------------------------------*/
 
-int *getKeysUsingCommandTable(struct redisCommand *cmd,robj **argv, int argc, int *numkeys) {
-    int j, i = 0, last, *keys;
-    REDIS_NOTUSED(argv);
-
-    if (cmd->firstkey == 0) {
-        *numkeys = 0;
-        return NULL;
-    }
-    last = cmd->lastkey;
-    if (last < 0) last = argc+last;
-    keys = zmalloc(sizeof(int)*((last - cmd->firstkey)+1));
-    for (j = cmd->firstkey; j <= last; j += cmd->keystep) {
-        redisAssert(j < argc);
-        keys[i++] = j;
-    }
-    *numkeys = i;
-    return keys;
-}
-
-int *getKeysFromCommand(struct redisCommand *cmd,robj **argv, int argc, int *numkeys, int flags) {
-    if (cmd->getkeys_proc) {
-        return cmd->getkeys_proc(cmd,argv,argc,numkeys,flags);
-    } else {
-        return getKeysUsingCommandTable(cmd,argv,argc,numkeys);
-    }
-}
-
-void getKeysFreeResult(int *result) {
-    zfree(result);
-}
-
-int *noPreloadGetKeys(struct redisCommand *cmd,robj **argv, int argc, int *numkeys, int flags) {
-    if (flags & REDIS_GETKEYS_PRELOAD) {
-        *numkeys = 0;
-        return NULL;
-    } else {
-        return getKeysUsingCommandTable(cmd,argv,argc,numkeys);
-    }
-}
-
-int *renameGetKeys(struct redisCommand *cmd,robj **argv, int argc, int *numkeys, int flags) {
-    if (flags & REDIS_GETKEYS_PRELOAD) {
-        int *keys = zmalloc(sizeof(int));
-        *numkeys = 1;
-        keys[0] = 1;
-        return keys;
-    } else {
-        return getKeysUsingCommandTable(cmd,argv,argc,numkeys);
-    }
-}
-
-int *zunionInterGetKeys(struct redisCommand *cmd,robj **argv, int argc, int *numkeys, int flags) {
-    int i, num, *keys;
-    REDIS_NOTUSED(cmd);
-    REDIS_NOTUSED(flags);
-
-    num = atoi(argv[2]->ptr);
-    /* Sanity check. Don't return any key if the command is going to
-     * reply with syntax error. */
-    if (num > (argc-3)) {
-        *numkeys = 0;
-        return NULL;
-    }
-    keys = zmalloc(sizeof(int)*num);
-    for (i = 0; i < num; i++) keys[i] = 3+i;
-    *numkeys = num;
-    return keys;
-}
-
-/* Slot to Key API. This is used by Redis Cluster in order to obtain in
- * a fast way a key that belongs to a specified hash slot. This is useful
- * while rehashing the cluster. */
-void SlotToKeyAdd(robj *key) {
-    unsigned int hashslot = keyHashSlot(key->ptr,sdslen(key->ptr));
-
-    zslInsert(server.cluster.slots_to_keys,hashslot,key);
-    incrRefCount(key);
-}
-
-void SlotToKeyDel(robj *key) {
-    unsigned int hashslot = keyHashSlot(key->ptr,sdslen(key->ptr));
-
-    zslDelete(server.cluster.slots_to_keys,hashslot,key);
-}
-
-unsigned int GetKeysInSlot(unsigned int hashslot, robj **keys, unsigned int count) {
-    zskiplistNode *n;
-    zrangespec range;
-    int j = 0;
-
-    range.min = range.max = hashslot;
-    range.minex = range.maxex = 0;
-    
-    n = zslFirstInRange(server.cluster.slots_to_keys, range);
-    while(n && n->score == hashslot && count--) {
-        keys[j++] = n->obj;
-        n = n->level[0].forward;
-    }
-    return j;
-}

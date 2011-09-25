@@ -183,6 +183,17 @@ void decrRefCount(void *obj) {
     robj *o = obj;
 
     if (o->refcount <= 0) redisPanic("decrRefCount against refcount <= 0");
+    /* Object is in memory, or in the process of being swapped out.
+     *
+     * If the object is being swapped out, abort the operation on
+     * decrRefCount even if the refcount does not drop to 0: the object
+     * is referenced at least two times, as value of the key AND as
+     * job->val in the iojob. So if we don't invalidate the iojob, when it is
+     * done but the relevant key was removed in the meantime, the
+     * complete jobs handler will not find the key about the job and the
+     * assert will fail. */
+    if (server.vm_enabled && o->storage == REDIS_VM_SWAPPING)
+        vmCancelThreadedIOJob(o);
     if (o->refcount == 1) {
         switch(o->type) {
         case REDIS_STRING: freeStringObject(o); break;
@@ -471,6 +482,7 @@ unsigned long estimateObjectIdleTime(robj *o) {
 robj *objectCommandLookup(redisClient *c, robj *key) {
     dictEntry *de;
 
+    if (server.vm_enabled) lookupKeyRead(c->db,key);
     if ((de = dictFind(c->db->dict,key->ptr)) == NULL) return NULL;
     return (robj*) dictGetEntryVal(de);
 }

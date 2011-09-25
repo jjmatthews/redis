@@ -1,4 +1,5 @@
 #include "redis.h"
+#include "bio.h"
 
 #include <signal.h>
 #include <fcntl.h>
@@ -10,10 +11,14 @@
 
 void aofUpdateCurrentSize(void);
 
+void aof_background_fsync(int fd) {
+    bioCreateBackgroundJob(REDIS_BIO_AOF_FSYNC,(void*)(long)fd,NULL,NULL);
+}
+
 /* Called when the user switches from "appendonly yes" to "appendonly no"
  * at runtime using the CONFIG command. */
 void stopAppendOnly(void) {
-    flushAppendOnlyFile();
+    flushAppendOnlyFile(1);
     aof_fsync(server.appendfd);
     close(server.appendfd);
 
@@ -58,63 +63,121 @@ int startAppendOnly(void) {
  * and the only way the client socket can get a write is entering when the
  * the event loop, we accumulate all the AOF writes in a memory
  * buffer and write it on disk using this function just before entering
- * the event loop again. */
-void flushAppendOnlyFile(void) {
-    time_t now;
+ * the event loop again.
+ *
+ * About the 'force' argument:
+ *
+ * When the fsync policy is set to 'everysec' we may delay the flush if there
+ * is still an fsync() going on in the background thread, since for instance
+ * on Linux write(2) will be blocked by the background fsync anyway.
+ * When this happens we remember that there is some aof buffer to be
+ * flushed ASAP, and will try to do that in the serverCron() function.
+ *
+ * However if force is set to 1 we'll write regardless of the background
+ * fsync. */
+void flushAppendOnlyFile(int force) {
     ssize_t nwritten;
+    int sync_in_progress = 0;
 
     if (sdslen(server.aofbuf) == 0) return;
+
+    if (server.appendfsync == APPENDFSYNC_EVERYSEC)
+        sync_in_progress = bioPendingJobsOfType(REDIS_BIO_AOF_FSYNC) != 0;
+
+    if (server.appendfsync == APPENDFSYNC_EVERYSEC && !force) {
+        /* With this append fsync policy we do background fsyncing.
+         * If the fsync is still in progress we can try to delay
+         * the write for a couple of seconds. */
+        if (sync_in_progress) {
+            if (server.aof_flush_postponed_start == 0) {
+                /* No previous write postponinig, remember that we are
+                 * postponing the flush and return. */
+                server.aof_flush_postponed_start = server.unixtime;
+                return;
+            } else if (server.unixtime - server.aof_flush_postponed_start < 2) {
+                /* We were already waiting for fsync to finish, but for less
+                 * than two seconds this is still ok. Postpone again. */
+                return;
+            }
+            /* Otherwise fall trough, and go write since we can't wait
+             * over two seconds. */
+            redisLog(REDIS_NOTICE,"Asynchronous AOF fsync is taking too long (disk is busy?). Writing the AOF buffer without waiting for fsync to complete, this may slow down Redis.");
+        }
+    }
+    /* If you are following this code path, then we are going to write so
+     * set reset the postponed flush sentinel to zero. */
+    server.aof_flush_postponed_start = 0;
 
     /* We want to perform a single write. This should be guaranteed atomic
      * at least if the filesystem we are writing is a real physical one.
      * While this will save us against the server being killed I don't think
      * there is much to do about the whole server stopping for power problems
      * or alike */
-     nwritten = write(server.appendfd,server.aofbuf,sdslen(server.aofbuf));
-     if (nwritten != (signed)sdslen(server.aofbuf)) {
+    nwritten = write(server.appendfd,server.aofbuf,sdslen(server.aofbuf));
+    if (nwritten != (signed)sdslen(server.aofbuf)) {
         /* Ooops, we are in troubles. The best thing to do for now is
          * aborting instead of giving the illusion that everything is
          * working as expected. */
-         if (nwritten == -1) {
+        if (nwritten == -1) {
             redisLog(REDIS_WARNING,"Exiting on error writing to the append-only file: %s",strerror(errno));
-         } else {
+        } else {
             redisLog(REDIS_WARNING,"Exiting on short write while writing to the append-only file: %s",strerror(errno));
-         }
-         exit(1);
+        }
+        exit(1);
     }
-    sdsfree(server.aofbuf);
-    server.aofbuf = sdsempty();
     server.appendonly_current_size += nwritten;
 
-    /* Don't Fsync if no-appendfsync-on-rewrite is set to yes and we have
-     * childs performing heavy I/O on disk. */
+    /* Re-use AOF buffer when it is small enough. The maximum comes from the
+     * arena size of 4k minus some overhead (but is otherwise arbitrary). */
+    if ((sdslen(server.aofbuf)+sdsavail(server.aofbuf)) < 4000) {
+        sdsclear(server.aofbuf);
+    } else {
+        sdsfree(server.aofbuf);
+        server.aofbuf = sdsempty();
+    }
+
+    /* Don't fsync if no-appendfsync-on-rewrite is set to yes and there are
+     * children doing I/O in the background. */
     if (server.no_appendfsync_on_rewrite &&
         (server.bgrewritechildpid != -1 || server.bgsavechildpid != -1))
             return;
-    /* Fsync if needed */
-    now = time(NULL);
-    if (server.appendfsync == APPENDFSYNC_ALWAYS ||
-        (server.appendfsync == APPENDFSYNC_EVERYSEC &&
-         now-server.lastfsync > 1))
-    {
+
+    /* Perform the fsync if needed. */
+    if (server.appendfsync == APPENDFSYNC_ALWAYS) {
         /* aof_fsync is defined as fdatasync() for Linux in order to avoid
          * flushing metadata. */
         aof_fsync(server.appendfd); /* Let's try to get this data on the disk */
-        server.lastfsync = now;
+        server.lastfsync = server.unixtime;
+    } else if ((server.appendfsync == APPENDFSYNC_EVERYSEC &&
+                server.unixtime > server.lastfsync)) {
+        if (!sync_in_progress) aof_background_fsync(server.appendfd);
+        server.lastfsync = server.unixtime;
     }
 }
 
-sds catAppendOnlyGenericCommand(sds buf, int argc, robj **argv) {
-    int j;
-    buf = sdscatprintf(buf,"*%d\r\n",argc);
+sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
+    char buf[32];
+    int len, j;
+    robj *o;
+
+    buf[0] = '*';
+    len = 1+ll2string(buf+1,sizeof(buf)-1,argc);
+    buf[len++] = '\r';
+    buf[len++] = '\n';
+    dst = sdscatlen(dst,buf,len);
+
     for (j = 0; j < argc; j++) {
-        robj *o = getDecodedObject(argv[j]);
-        buf = sdscatprintf(buf,"$%lu\r\n",(unsigned long)sdslen(o->ptr));
-        buf = sdscatlen(buf,o->ptr,sdslen(o->ptr));
-        buf = sdscatlen(buf,"\r\n",2);
+        o = getDecodedObject(argv[j]);
+        buf[0] = '$';
+        len = 1+ll2string(buf+1,sizeof(buf)-1,sdslen(o->ptr));
+        buf[len++] = '\r';
+        buf[len++] = '\n';
+        dst = sdscatlen(dst,buf,len);
+        dst = sdscatlen(dst,o->ptr,sdslen(o->ptr));
+        dst = sdscatlen(dst,"\r\n",2);
         decrRefCount(o);
     }
-    return buf;
+    return dst;
 }
 
 sds catAppendOnlyExpireAtCommand(sds buf, robj *key, robj *seconds) {
@@ -248,6 +311,7 @@ int loadAppendOnlyFile(char *filename) {
         char buf[128];
         sds argsds;
         struct redisCommand *cmd;
+        int force_swapout;
 
         /* Serve the clients from time to time */
         if (!(loops++ % 1000)) {
@@ -263,6 +327,8 @@ int loadAppendOnlyFile(char *filename) {
         }
         if (buf[0] != '*') goto fmterr;
         argc = atoi(buf+1);
+        if (argc < 1) goto fmterr;
+
         argv = zmalloc(sizeof(robj*)*argc);
         for (j = 0; j < argc; j++) {
             if (fgets(buf,sizeof(buf),fp) == NULL) goto readerr;
@@ -295,6 +361,17 @@ int loadAppendOnlyFile(char *filename) {
         for (j = 0; j < fakeClient->argc; j++)
             decrRefCount(fakeClient->argv[j]);
         zfree(fakeClient->argv);
+
+        /* Handle swapping while loading big datasets when VM is on */
+        force_swapout = 0;
+        if ((zmalloc_used_memory() - server.vm_max_memory) > 1024*1024*32)
+            force_swapout = 1;
+
+        if (server.vm_enabled && force_swapout) {
+            while (zmalloc_used_memory() > server.vm_max_memory) {
+                if (vmSwapOneObjectBlocking() == REDIS_ERR) break;
+            }
+        }
     }
 
     /* This point can only be reached when EOF is reached without errors.
@@ -356,14 +433,25 @@ int rewriteAppendOnlyFile(char *filename) {
 
         /* Iterate this DB writing every entry */
         while((de = dictNext(di)) != NULL) {
-            sds keystr;
+            sds keystr = dictGetEntryKey(de);
             robj key, *o;
             time_t expiretime;
+            int swapped;
 
             keystr = dictGetEntryKey(de);
             o = dictGetEntryVal(de);
             initStaticStringObject(key,keystr);
-
+            /* If the value for this key is swapped, load a preview in memory.
+             * We use a "swapped" flag to remember if we need to free the
+             * value object instead to just increment the ref count anyway
+             * in order to avoid copy-on-write of pages if we are forked() */
+            if (!server.vm_enabled || o->storage == REDIS_VM_MEMORY ||
+                o->storage == REDIS_VM_SWAPPING) {
+                swapped = 0;
+            } else {
+                o = vmPreviewObject(o);
+                swapped = 1;
+            }
             expiretime = getExpire(db,&key);
 
             /* Save the key and associated value */
@@ -532,6 +620,7 @@ int rewriteAppendOnlyFile(char *filename) {
                 if (fwriteBulkObject(fp,&key) == 0) goto werr;
                 if (fwriteBulkLongLong(fp,expiretime) == 0) goto werr;
             }
+            if (swapped) decrRefCount(o);
         }
         dictReleaseIterator(di);
     }
@@ -576,11 +665,13 @@ int rewriteAppendOnlyFileBackground(void) {
     long long start;
 
     if (server.bgrewritechildpid != -1) return REDIS_ERR;
+    if (server.vm_enabled) waitEmptyIOJobsQueue();
     start = ustime();
     if ((childpid = fork()) == 0) {
         char tmpfile[256];
 
         /* Child */
+        if (server.vm_enabled) vmReopenSwapFile();
         if (server.ipfd > 0) close(server.ipfd);
         if (server.sofd > 0) close(server.sofd);
         snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) getpid());
@@ -649,58 +740,133 @@ void aofUpdateCurrentSize(void) {
 
 /* A background append only file rewriting (BGREWRITEAOF) terminated its work.
  * Handle this. */
-void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
+void backgroundRewriteDoneHandler(int statloc) {
+    int exitcode = WEXITSTATUS(statloc);
+    int bysignal = WIFSIGNALED(statloc);
+
     if (!bysignal && exitcode == 0) {
-        int fd;
+        int newfd, oldfd;
+        int nwritten;
         char tmpfile[256];
+        long long now = ustime();
 
         redisLog(REDIS_NOTICE,
-            "Background append only file rewriting terminated with success");
-        /* Now it's time to flush the differences accumulated by the parent */
-        snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) server.bgrewritechildpid);
-        fd = open(tmpfile,O_WRONLY|O_APPEND);
-        if (fd == -1) {
-            redisLog(REDIS_WARNING, "Not able to open the temp append only file produced by the child: %s", strerror(errno));
+            "Background AOF rewrite terminated with success");
+
+        /* Flush the differences accumulated by the parent to the
+         * rewritten AOF. */
+        snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof",
+            (int)server.bgrewritechildpid);
+        newfd = open(tmpfile,O_WRONLY|O_APPEND);
+        if (newfd == -1) {
+            redisLog(REDIS_WARNING,
+                "Unable to open the temporary AOF produced by the child: %s", strerror(errno));
             goto cleanup;
         }
-        /* Flush our data... */
-        if (write(fd,server.bgrewritebuf,sdslen(server.bgrewritebuf)) !=
-                (signed) sdslen(server.bgrewritebuf)) {
-            redisLog(REDIS_WARNING, "Error or short write trying to flush the parent diff of the append log file in the child temp file: %s", strerror(errno));
-            close(fd);
+
+        nwritten = write(newfd,server.bgrewritebuf,sdslen(server.bgrewritebuf));
+        if (nwritten != (signed)sdslen(server.bgrewritebuf)) {
+            if (nwritten == -1) {
+                redisLog(REDIS_WARNING,
+                    "Error trying to flush the parent diff to the rewritten AOF: %s", strerror(errno));
+            } else {
+                redisLog(REDIS_WARNING,
+                    "Short write trying to flush the parent diff to the rewritten AOF: %s", strerror(errno));
+            }
+            close(newfd);
             goto cleanup;
         }
-        redisLog(REDIS_NOTICE,"Parent diff flushed into the new append log file with success (%lu bytes)",sdslen(server.bgrewritebuf));
-        /* Now our work is to rename the temp file into the stable file. And
-         * switch the file descriptor used by the server for append only. */
+
+        redisLog(REDIS_NOTICE,
+            "Parent diff successfully flushed to the rewritten AOF (%lu bytes)", nwritten);
+
+        /* The only remaining thing to do is to rename the temporary file to
+         * the configured file and switch the file descriptor used to do AOF
+         * writes. We don't want close(2) or rename(2) calls to block the
+         * server on old file deletion.
+         *
+         * There are two possible scenarios:
+         *
+         * 1) AOF is DISABLED and this was a one time rewrite. The temporary
+         * file will be renamed to the configured file. When this file already
+         * exists, it will be unlinked, which may block the server.
+         *
+         * 2) AOF is ENABLED and the rewritten AOF will immediately start
+         * receiving writes. After the temporary file is renamed to the
+         * configured file, the original AOF file descriptor will be closed.
+         * Since this will be the last reference to that file, closing it
+         * causes the underlying file to be unlinked, which may block the
+         * server.
+         *
+         * To mitigate the blocking effect of the unlink operation (either
+         * caused by rename(2) in scenario 1, or by close(2) in scenario 2), we
+         * use a background thread to take care of this. First, we
+         * make scenario 1 identical to scenario 2 by opening the target file
+         * when it exists. The unlink operation after the rename(2) will then
+         * be executed upon calling close(2) for its descriptor. Everything to
+         * guarantee atomicity for this switch has already happened by then, so
+         * we don't care what the outcome or duration of that close operation
+         * is, as long as the file descriptor is released again. */
+        if (server.appendfd == -1) {
+            /* AOF disabled */
+
+             /* Don't care if this fails: oldfd will be -1 and we handle that.
+              * One notable case of -1 return is if the old file does
+              * not exist. */
+             oldfd = open(server.appendfilename,O_RDONLY|O_NONBLOCK);
+        } else {
+            /* AOF enabled */
+            oldfd = -1; /* We'll set this to the current AOF filedes later. */
+        }
+
+        /* Rename the temporary file. This will not unlink the target file if
+         * it exists, because we reference it with "oldfd". */
         if (rename(tmpfile,server.appendfilename) == -1) {
-            redisLog(REDIS_WARNING,"Can't rename the temp append only file into the stable one: %s", strerror(errno));
-            close(fd);
+            redisLog(REDIS_WARNING,
+                "Error trying to rename the temporary AOF: %s", strerror(errno));
+            close(newfd);
+            if (oldfd != -1) close(oldfd);
             goto cleanup;
         }
-        /* Mission completed... almost */
-        redisLog(REDIS_NOTICE,"Append only file successfully rewritten.");
-        if (server.appendfd != -1) {
-            /* If append only is actually enabled... */
-            close(server.appendfd);
-            server.appendfd = fd;
-            if (server.appendfsync != APPENDFSYNC_NO) aof_fsync(fd);
-            server.appendseldb = -1; /* Make sure it will issue SELECT */
-            redisLog(REDIS_NOTICE,"The new append only file was selected for future appends.");
+
+        if (server.appendfd == -1) {
+            /* AOF disabled, we don't need to set the AOF file descriptor
+             * to this new file, so we can close it. */
+            close(newfd);
+        } else {
+            /* AOF enabled, replace the old fd with the new one. */
+            oldfd = server.appendfd;
+            server.appendfd = newfd;
+            if (server.appendfsync == APPENDFSYNC_ALWAYS)
+                aof_fsync(newfd);
+            else if (server.appendfsync == APPENDFSYNC_EVERYSEC)
+                aof_background_fsync(newfd);
+            server.appendseldb = -1; /* Make sure SELECT is re-issued */
             aofUpdateCurrentSize();
             server.auto_aofrewrite_base_size = server.appendonly_current_size;
-        } else {
-            /* If append only is disabled we just generate a dump in this
-             * format. Why not? */
-            close(fd);
+
+            /* Clear regular AOF buffer since its contents was just written to
+             * the new AOF from the background rewrite buffer. */
+            sdsfree(server.aofbuf);
+            server.aofbuf = sdsempty();
         }
+
+        redisLog(REDIS_NOTICE, "Background AOF rewrite successful");
+
+        /* Asynchronously close the overwritten AOF. */
+        if (oldfd != -1) bioCreateBackgroundJob(REDIS_BIO_CLOSE_FILE,(void*)(long)oldfd,NULL,NULL);
+
+        redisLog(REDIS_VERBOSE,
+            "Background AOF rewrite signal handler took %lldus", ustime()-now);
     } else if (!bysignal && exitcode != 0) {
-        redisLog(REDIS_WARNING, "Background append only file rewriting error");
+        redisLog(REDIS_WARNING,
+            "Background AOF rewrite terminated with error");
     } else {
         redisLog(REDIS_WARNING,
-            "Background append only file rewriting terminated by signal %d",
-            bysignal);
+            "Background AOF rewrite terminated by signal %d",
+            WTERMSIG(statloc));
     }
+
 cleanup:
     sdsfree(server.bgrewritebuf);
     server.bgrewritebuf = sdsempty();

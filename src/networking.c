@@ -14,20 +14,14 @@ redisClient *createClient(int fd) {
     redisClient *c = zmalloc(sizeof(redisClient));
     c->bufpos = 0;
 
-    /* passing -1 as fd it is possible to create a non connected client.
-     * This is useful since all the Redis commands needs to be executed
-     * in the context of a client. When commands are executed in other
-     * contexts (for instance a Lua script) we need a non connected client. */
-    if (fd != -1) {
-        anetNonBlock(NULL,fd);
-        anetTcpNoDelay(NULL,fd);
-        if (aeCreateFileEvent(server.el,fd,AE_READABLE,
-            readQueryFromClient, c) == AE_ERR)
-        {
-            close(fd);
-            zfree(c);
-            return NULL;
-        }
+    anetNonBlock(NULL,fd);
+    anetTcpNoDelay(NULL,fd);
+    if (aeCreateFileEvent(server.el,fd,AE_READABLE,
+        readQueryFromClient, c) == AE_ERR)
+    {
+        close(fd);
+        zfree(c);
+        return NULL;
     }
 
     selectDb(c,0);
@@ -66,7 +60,6 @@ redisClient *createClient(int fd) {
 /* Set the event loop to listen for write events on the client's socket.
  * Typically gets called every time a reply is built. */
 int _installWriteEvent(redisClient *c) {
-    if (c->flags & REDIS_LUA_CLIENT) return REDIS_OK;
     if (c->fd <= 0) return REDIS_ERR;
     if (c->bufpos == 0 && listLength(c->reply) == 0 &&
         (c->replstate == REDIS_REPL_NONE ||
@@ -503,6 +496,25 @@ void freeClient(redisClient *c) {
         redisAssert(ln != NULL);
         listDelNode(server.unblocked_clients,ln);
     }
+    /* Remove from the list of clients waiting for swapped keys, or ready
+     * to be restarted, but not yet woken up again. */
+    if (c->flags & REDIS_IO_WAIT) {
+        redisAssert(server.vm_enabled);
+        if (listLength(c->io_keys) == 0) {
+            ln = listSearchKey(server.io_ready_clients,c);
+
+            /* When this client is waiting to be woken up (REDIS_IO_WAIT),
+             * it should be present in the list io_ready_clients */
+            redisAssert(ln != NULL);
+            listDelNode(server.io_ready_clients,ln);
+        } else {
+            while (listLength(c->io_keys)) {
+                ln = listFirst(c->io_keys);
+                dontWaitForSwappedKey(c,ln->value);
+            }
+        }
+        server.vm_blocked_clients--;
+    }
     listRelease(c->io_keys);
     /* Master/slave cleanup.
      * Case 1: we lost the connection with a slave. */
@@ -610,7 +622,7 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
     }
     if (totwritten > 0) c->lastinteraction = time(NULL);
-    if (listLength(c->reply) == 0) {
+    if (c->bufpos == 0 && listLength(c->reply) == 0) {
         c->sentlen = 0;
         aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
 
@@ -901,6 +913,7 @@ void clientCommand(redisClient *c) {
             if (p == flags) *p++ = 'N';
             if (client->flags & REDIS_MULTI) *p++ = 'x';
             if (client->flags & REDIS_BLOCKED) *p++ = 'b';
+            if (client->flags & REDIS_IO_WAIT) *p++ = 'i';
             if (client->flags & REDIS_DIRTY_CAS) *p++ = 'd';
             if (client->flags & REDIS_CLOSE_AFTER_REPLY) *p++ = 'c';
             if (client->flags & REDIS_UNBLOCKED) *p++ = 'u';
@@ -941,9 +954,6 @@ void clientCommand(redisClient *c) {
     }
 }
 
-/* Rewrite the command vector of the client. All the new objects ref count
- * is incremented. The old command vector is freed, and the old objects
- * ref count is decremented. */
 void rewriteClientCommandVector(redisClient *c, int argc, ...) {
     va_list ap;
     int j;
@@ -969,22 +979,4 @@ void rewriteClientCommandVector(redisClient *c, int argc, ...) {
     c->cmd = lookupCommand(c->argv[0]->ptr);
     redisAssert(c->cmd != NULL);
     va_end(ap);
-}
-
-/* Rewrite a single item in the command vector.
- * The new val ref count is incremented, and the old decremented. */
-void rewriteClientCommandArgument(redisClient *c, int i, robj *newval) {
-    robj *oldval;
-   
-    redisAssert(i < c->argc);
-    oldval = c->argv[i];
-    c->argv[i] = newval;
-    incrRefCount(newval);
-    decrRefCount(oldval);
-
-    /* If this is the command name make sure to fix c->cmd. */
-    if (i == 0) {
-        c->cmd = lookupCommand(c->argv[0]->ptr);
-        redisAssert(c->cmd != NULL);
-    }
 }

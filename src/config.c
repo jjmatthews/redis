@@ -30,6 +30,7 @@ void loadServerConfig(char *filename) {
     char buf[REDIS_CONFIGLINE_MAX+1], *err = NULL;
     int linenum = 0;
     sds line = NULL;
+    int really_use_vm = 0;
 
     if (filename[0] == '-' && filename[1] == '\0')
         fp = stdin;
@@ -189,7 +190,7 @@ void loadServerConfig(char *filename) {
             server.masterport = atoi(argv[2]);
             server.replstate = REDIS_REPL_CONNECT;
         } else if (!strcasecmp(argv[0],"masterauth") && argc == 2) {
-        	server.masterauth = zstrdup(argv[1]);
+            server.masterauth = zstrdup(argv[1]);
         } else if (!strcasecmp(argv[0],"slave-serve-stale-data") && argc == 2) {
             if ((server.repl_serve_stale_data = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
@@ -251,6 +252,25 @@ void loadServerConfig(char *filename) {
         } else if (!strcasecmp(argv[0],"dbfilename") && argc == 2) {
             zfree(server.dbfilename);
             server.dbfilename = zstrdup(argv[1]);
+        } else if (!strcasecmp(argv[0],"vm-enabled") && argc == 2) {
+            if ((server.vm_enabled = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0],"really-use-vm") && argc == 2) {
+            if ((really_use_vm = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0],"vm-swap-file") && argc == 2) {
+            zfree(server.vm_swap_file);
+            server.vm_swap_file = zstrdup(argv[1]);
+        } else if (!strcasecmp(argv[0],"vm-max-memory") && argc == 2) {
+            server.vm_max_memory = memtoll(argv[1],NULL);
+        } else if (!strcasecmp(argv[0],"vm-page-size") && argc == 2) {
+            server.vm_page_size = memtoll(argv[1], NULL);
+        } else if (!strcasecmp(argv[0],"vm-pages") && argc == 2) {
+            server.vm_pages = memtoll(argv[1], NULL);
+        } else if (!strcasecmp(argv[0],"vm-max-threads") && argc == 2) {
+            server.vm_max_threads = strtoll(argv[1], NULL, 10);
         } else if (!strcasecmp(argv[0],"hash-max-zipmap-entries") && argc == 2) {
             server.hash_max_zipmap_entries = memtoll(argv[1], NULL);
         } else if (!strcasecmp(argv[0],"hash-max-zipmap-value") && argc == 2) {
@@ -289,15 +309,6 @@ void loadServerConfig(char *filename) {
                     err = "Target command name already exists"; goto loaderr;
                 }
             }
-        } else if (!strcasecmp(argv[0],"cluster-enabled") && argc == 2) {
-            if ((server.cluster_enabled = yesnotoi(argv[1])) == -1) {
-                err = "argument must be 'yes' or 'no'"; goto loaderr;
-            }
-        } else if (!strcasecmp(argv[0],"cluster-config-file") && argc == 2) {
-            zfree(server.cluster.configfile);
-            server.cluster.configfile = zstrdup(argv[1]);
-        } else if (!strcasecmp(argv[0],"lua-time-limit") && argc == 2) {
-            server.lua_time_limit = strtoll(argv[1],NULL,10);
         } else if (!strcasecmp(argv[0],"slowlog-log-slower-than") &&
                    argc == 2)
         {
@@ -313,6 +324,7 @@ void loadServerConfig(char *filename) {
         sdsfree(line);
     }
     if (fp != stdin) fclose(fp);
+    if (server.vm_enabled && !really_use_vm) goto vm_warning;
     return;
 
 loaderr:
@@ -320,6 +332,15 @@ loaderr:
     fprintf(stderr, "Reading the configuration file, at line %d\n", linenum);
     fprintf(stderr, ">>> '%s'\n", line);
     fprintf(stderr, "%s\n", err);
+    exit(1);
+
+vm_warning:
+    fprintf(stderr, "\nARE YOU SURE YOU WANT TO USE VM?\n\n");
+    fprintf(stderr, "Redis Virtual Memory is going to be deprecated soon,\n");
+    fprintf(stderr, "we think you should NOT use it, but use Redis only if\n");
+    fprintf(stderr, "your data is suitable for an in-memory database.\n");
+    fprintf(stderr, "If you *really* want VM add this in the config file:\n");
+    fprintf(stderr, "\n    really-use-vm yes\n\n");
     exit(1);
 }
 
@@ -474,9 +495,6 @@ void configSetCommand(redisClient *c) {
     } else if (!strcasecmp(c->argv[2]->ptr,"zset-max-ziplist-value")) {
         if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
         server.zset_max_ziplist_value = ll;
-    } else if (!strcasecmp(c->argv[2]->ptr,"lua-time-limit")) {
-        if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
-        server.lua_time_limit = ll;
     } else if (!strcasecmp(c->argv[2]->ptr,"slowlog-log-slower-than")) {
         if (getLongLongFromObject(o,&ll) == REDIS_ERR) goto badfmt;
         server.slowlog_log_slower_than = ll;
@@ -508,12 +526,11 @@ void configGetCommand(redisClient *c) {
     if (stringmatch(pattern,"dir",0)) {
         char buf[1024];
 
-        addReplyBulkCString(c,"dir");
-        if (getcwd(buf,sizeof(buf)) == NULL) {
+        if (getcwd(buf,sizeof(buf)) == NULL)
             buf[0] = '\0';
-        } else {
-            addReplyBulkCString(c,buf);
-        }
+
+        addReplyBulkCString(c,"dir");
+        addReplyBulkCString(c,buf);
         matches++;
     }
     if (stringmatch(pattern,"dbfilename",0)) {
@@ -654,11 +671,6 @@ void configGetCommand(redisClient *c) {
         addReplyBulkLongLong(c,server.zset_max_ziplist_value);
         matches++;
     }
-    if (stringmatch(pattern,"lua-time-limit",0)) {
-        addReplyBulkCString(c,"lua-time-limit");
-        addReplyBulkLongLong(c,server.lua_time_limit);
-        matches++;
-    }
     if (stringmatch(pattern,"slowlog-log-slower-than",0)) {
         addReplyBulkCString(c,"slowlog-log-slower-than");
         addReplyBulkLongLong(c,server.slowlog_log_slower_than);
@@ -686,7 +698,6 @@ void configCommand(redisClient *c) {
         server.stat_numcommands = 0;
         server.stat_numconnections = 0;
         server.stat_expiredkeys = 0;
-        resetCommandTableStats();
         addReply(c,shared.ok);
     } else {
         addReplyError(c,

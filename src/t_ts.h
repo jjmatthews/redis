@@ -13,6 +13,10 @@
 #define REDIS_TS 5
 
 /*
+ * stdnet commands
+ */
+void zdiffstoreCommand(redisClient *c);
+/*
  * 7 TIMESERIES COMMANDS
  */
 void tslenCommand(redisClient *c);
