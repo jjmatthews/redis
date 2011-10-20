@@ -74,6 +74,11 @@ void loadServerConfig(char *filename) {
             server.bindaddr = zstrdup(argv[1]);
         } else if (!strcasecmp(argv[0],"unixsocket") && argc == 2) {
             server.unixsocket = zstrdup(argv[1]);
+        } else if (!strcasecmp(argv[0],"unixsocketperm") && argc == 2) {
+            server.unixsocketperm = (mode_t)strtol(argv[1], NULL, 8);
+            if (errno || server.unixsocketperm > 0777) {
+                err = "Invalid socket file permissions"; goto loaderr;
+            }
         } else if (!strcasecmp(argv[0],"save") && argc == 3) {
             int seconds = atoi(argv[1]);
             int changes = atoi(argv[2]);
@@ -501,6 +506,18 @@ void configSetCommand(redisClient *c) {
     } else if (!strcasecmp(c->argv[2]->ptr,"slowlog-max-len")) {
         if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
         server.slowlog_max_len = (unsigned)ll;
+    } else if (!strcasecmp(c->argv[2]->ptr,"loglevel")) {
+        if (!strcasecmp(o->ptr,"warning")) {
+            server.verbosity = REDIS_WARNING;
+        } else if (!strcasecmp(o->ptr,"notice")) {
+            server.verbosity = REDIS_NOTICE;
+        } else if (!strcasecmp(o->ptr,"verbose")) {
+            server.verbosity = REDIS_VERBOSE;
+        } else if (!strcasecmp(o->ptr,"debug")) {
+            server.verbosity = REDIS_DEBUG;
+        } else {
+            goto badfmt;
+        }
     } else {
         addReplyErrorFormat(c,"Unsupported CONFIG parameter: %s",
             (char*)c->argv[2]->ptr);
@@ -679,6 +696,20 @@ void configGetCommand(redisClient *c) {
     if (stringmatch(pattern,"slowlog-max-len",0)) {
         addReplyBulkCString(c,"slowlog-max-len");
         addReplyBulkLongLong(c,server.slowlog_max_len);
+        matches++;
+    }
+    if (stringmatch(pattern,"loglevel",0)) {
+        char *s;
+
+        switch(server.verbosity) {
+        case REDIS_WARNING: s = "warning"; break;
+        case REDIS_VERBOSE: s = "verbose"; break;
+        case REDIS_NOTICE: s = "notice"; break;
+        case REDIS_DEBUG: s = "debug"; break;
+        default: s = "unknown"; break; /* too harmless to panic */
+        }
+        addReplyBulkCString(c,"loglevel");
+        addReplyBulkCString(c,s);
         matches++;
     }
     setDeferredMultiBulkLength(c,replylen,matches*2);

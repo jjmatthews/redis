@@ -382,6 +382,13 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
      * function is called, so we can delete it. */
     aeDeleteFileEvent(server.el,fd,AE_READABLE|AE_WRITABLE);
 
+    /* If this event fired after the user turned the instance into a master
+     * with SLAVEOF NO ONE we must just return ASAP. */
+    if (server.replstate == REDIS_REPL_NONE) {
+        close(fd);
+        return;
+    }
+
     /* AUTH with the master if required. */
     if(server.masterauth) {
         char authcmd[1024];

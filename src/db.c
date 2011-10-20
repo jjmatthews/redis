@@ -207,7 +207,13 @@ void flushallCommand(redisClient *c) {
         kill(server.bgsavechildpid,SIGKILL);
         rdbRemoveTempFile(server.bgsavechildpid);
     }
-    rdbSave(server.dbfilename);
+    if (server.saveparamslen > 0) {
+        /* Normally rdbSave() will reset dirty, but we don't want this here
+         * as otherwise FLUSHALL will not be replicated nor put into the AOF. */
+        int saved_dirty = server.dirty;
+        rdbSave(server.dbfilename);
+        server.dirty = saved_dirty;
+    }
     server.dirty++;
 }
 
@@ -343,6 +349,7 @@ void shutdownCommand(redisClient *c) {
 
 void renameGenericCommand(redisClient *c, int nx) {
     robj *o;
+    time_t expire;
 
     /* To use the same key as src and dst is probably an error */
     if (sdscmp(c->argv[1]->ptr,c->argv[2]->ptr) == 0) {
@@ -354,16 +361,18 @@ void renameGenericCommand(redisClient *c, int nx) {
         return;
 
     incrRefCount(o);
+    expire = getExpire(c->db,c->argv[1]);
     if (lookupKeyWrite(c->db,c->argv[2]) != NULL) {
         if (nx) {
             decrRefCount(o);
             addReply(c,shared.czero);
             return;
         }
-        dbOverwrite(c->db,c->argv[2],o);
-    } else {
-        dbAdd(c->db,c->argv[2],o);
+        /* Overwrite: delete the old key before creating the new one with the same name. */
+        dbDelete(c->db,c->argv[2]);
     }
+    dbAdd(c->db,c->argv[2],o);
+    if (expire != -1) setExpire(c->db,c->argv[2],expire);
     dbDelete(c->db,c->argv[1]);
     signalModifiedKey(c->db,c->argv[1]);
     signalModifiedKey(c->db,c->argv[2]);
