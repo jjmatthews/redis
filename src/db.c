@@ -80,7 +80,7 @@ void dbAdd(redisDb *db, robj *key, robj *val) {
     sds copy = sdsdup(key->ptr);
     int retval = dictAdd(db->dict, copy, val);
 
-    redisAssert(retval == REDIS_OK);
+    redisAssertWithInfo(NULL,key,retval == REDIS_OK);
     if (server.cluster_enabled) SlotToKeyAdd(key);
  }
 
@@ -92,7 +92,7 @@ void dbAdd(redisDb *db, robj *key, robj *val) {
 void dbOverwrite(redisDb *db, robj *key, robj *val) {
     struct dictEntry *de = dictFind(db->dict,key->ptr);
     
-    redisAssert(de != NULL);
+    redisAssertWithInfo(NULL,key,de != NULL);
     dictReplace(db->dict, key->ptr, val);
 }
 
@@ -214,7 +214,13 @@ void flushallCommand(redisClient *c) {
         kill(server.bgsavechildpid,SIGKILL);
         rdbRemoveTempFile(server.bgsavechildpid);
     }
-    rdbSave(server.dbfilename);
+    if (server.saveparamslen > 0) {
+        /* Normally rdbSave() will reset dirty, but we don't want this here
+         * as otherwise FLUSHALL will not be replicated nor put into the AOF. */
+        int saved_dirty = server.dirty;
+        rdbSave(server.dbfilename);
+        server.dirty = saved_dirty;
+    }
     server.dirty++;
 }
 
@@ -330,6 +336,7 @@ void shutdownCommand(redisClient *c) {
 
 void renameGenericCommand(redisClient *c, int nx) {
     robj *o;
+    time_t expire;
 
     /* To use the same key as src and dst is probably an error */
     if (sdscmp(c->argv[1]->ptr,c->argv[2]->ptr) == 0) {
@@ -341,16 +348,18 @@ void renameGenericCommand(redisClient *c, int nx) {
         return;
 
     incrRefCount(o);
+    expire = getExpire(c->db,c->argv[1]);
     if (lookupKeyWrite(c->db,c->argv[2]) != NULL) {
         if (nx) {
             decrRefCount(o);
             addReply(c,shared.czero);
             return;
         }
-        dbOverwrite(c->db,c->argv[2],o);
-    } else {
-        dbAdd(c->db,c->argv[2],o);
+        /* Overwrite: delete the old key before creating the new one with the same name. */
+        dbDelete(c->db,c->argv[2]);
     }
+    dbAdd(c->db,c->argv[2],o);
+    if (expire != -1) setExpire(c->db,c->argv[2],expire);
     dbDelete(c->db,c->argv[1]);
     signalModifiedKey(c->db,c->argv[1]);
     signalModifiedKey(c->db,c->argv[2]);
@@ -421,7 +430,7 @@ void moveCommand(redisClient *c) {
 int removeExpire(redisDb *db, robj *key) {
     /* An expire may only be removed if there is a corresponding entry in the
      * main dict. Otherwise, the key will never be freed. */
-    redisAssert(dictFind(db->dict,key->ptr) != NULL);
+    redisAssertWithInfo(NULL,key,dictFind(db->dict,key->ptr) != NULL);
     return dictDelete(db->expires,key->ptr) == DICT_OK;
 }
 
@@ -430,7 +439,7 @@ void setExpire(redisDb *db, robj *key, time_t when) {
 
     /* Reuse the sds from the main dict in the expire dict */
     de = dictFind(db->dict,key->ptr);
-    redisAssert(de != NULL);
+    redisAssertWithInfo(NULL,key,de != NULL);
     dictReplace(db->expires,dictGetEntryKey(de),(void*)when);
 }
 
@@ -445,7 +454,7 @@ time_t getExpire(redisDb *db, robj *key) {
 
     /* The entry was found in the expire dict, this means it should also
      * be present in the main dict (safety check). */
-    redisAssert(dictFind(db->dict,key->ptr) != NULL);
+    redisAssertWithInfo(NULL,key,dictFind(db->dict,key->ptr) != NULL);
     return (time_t) dictGetEntryVal(de);
 }
 
@@ -527,7 +536,7 @@ void expireGenericCommand(redisClient *c, robj *key, robj *param, long offset) {
     if (seconds <= 0 && !server.loading && !server.masterhost) {
         robj *aux;
 
-        redisAssert(dbDelete(c->db,key));
+        redisAssertWithInfo(c,key,dbDelete(c->db,key));
         server.dirty++;
 
         /* Replicate/AOF this as an explicit DEL. */

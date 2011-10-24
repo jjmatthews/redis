@@ -1,3 +1,6 @@
+#include "t_ts.h"
+#include "lzf.h"    /* LZF compression library */
+
 #include <math.h>
 #include <sys/types.h>
 #include <sys/time.h>
@@ -5,9 +8,7 @@
 #include <sys/wait.h>
 #include <arpa/inet.h>
 #include <sys/stat.h>
-#include "rdb.h"
-#include "lzf.h" /* LZF compression library */
-#include "t_ts.h"
+
 
 static int rdbWriteRaw(rio *rdb, void *p, size_t len) {
     if (rdb && rioWrite(rdb,p,len) == 0)
@@ -285,7 +286,7 @@ int rdbSaveStringObject(rio *rdb, robj *obj) {
     if (obj->encoding == REDIS_ENCODING_INT) {
         return rdbSaveLongLongAsStringObject(rdb,(long)obj->ptr);
     } else {
-        redisAssert(obj->encoding == REDIS_ENCODING_RAW);
+        redisAssertWithInfo(NULL,obj,obj->encoding == REDIS_ENCODING_RAW);
         return rdbSaveRawString(rdb,obj->ptr,sdslen(obj->ptr));
     }
 }
@@ -571,7 +572,7 @@ int rdbSaveObject(rio *rdb, robj *o) {
  * we could switch to a faster solution. */
 off_t rdbSavedObjectLen(robj *o) {
     int len = rdbSaveObject(NULL,o);
-    redisAssert(len != -1);
+    redisAssertWithInfo(NULL,o,len != -1);
     return len;
 }
 
@@ -978,19 +979,24 @@ int rdbLoad(char *filename) {
     rio rdb;
 
     fp = fopen(filename,"r");
-    if (!fp) return REDIS_ERR;
+    if (!fp) {
+        errno = ENOENT;
+        return REDIS_ERR;
+    }
     rioInitWithFile(&rdb,fp);
     if (rioRead(&rdb,buf,9) == 0) goto eoferr;
     buf[9] = '\0';
     if (memcmp(buf,"REDIS",5) != 0) {
         fclose(fp);
         redisLog(REDIS_WARNING,"Wrong signature trying to load DB from file");
+        errno = EINVAL;
         return REDIS_ERR;
     }
     rdbver = atoi(buf+5);
     if (rdbver < 1 || rdbver > 2) {
         fclose(fp);
         redisLog(REDIS_WARNING,"Can't handle RDB format version %d",rdbver);
+        errno = EINVAL;
         return REDIS_ERR;
     }
 

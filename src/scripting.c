@@ -128,7 +128,7 @@ void luaPushError(lua_State *lua, char *error) {
     lua_settable(lua,-3);
 }
 
-int luaRedisCommand(lua_State *lua) {
+int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     int j, argc = lua_gettop(lua);
     struct redisCommand *cmd;
     robj **argv;
@@ -158,24 +158,37 @@ int luaRedisCommand(lua_State *lua) {
         return 1;
     }
 
+    /* Setup our fake client for command execution */
+    c->argv = argv;
+    c->argc = argc;
+
     /* Command lookup */
     cmd = lookupCommand(argv[0]->ptr);
     if (!cmd || ((cmd->arity > 0 && cmd->arity != argc) ||
                    (argc < -cmd->arity)))
     {
-        for (j = 0; j < argc; j++) decrRefCount(argv[j]);
-        zfree(argv);
         if (cmd)
             luaPushError(lua,
                 "Wrong number of args calling Redis command From Lua script");
         else
             luaPushError(lua,"Unknown Redis command called from Lua script");
-        return 1;
+        goto cleanup;
     }
 
-    /* Run the command in the context of a fake client */
-    c->argv = argv;
-    c->argc = argc;
+    if (cmd->flags & REDIS_CMD_NOSCRIPT) {
+        luaPushError(lua, "This Redis command is not allowed from scripts");
+        goto cleanup;
+    }
+
+    if (cmd->flags & REDIS_CMD_WRITE && server.lua_random_dirty) {
+        luaPushError(lua,
+            "Write commands not allowed after non deterministic commands");
+        goto cleanup;
+    }
+
+    if (cmd->flags & REDIS_CMD_RANDOM) server.lua_random_dirty = 1;
+
+    /* Run the command */
     cmd->proc(c);
 
     /* Convert the result of the Redis command into a suitable Lua type.
@@ -192,16 +205,34 @@ int luaRedisCommand(lua_State *lua) {
         reply = sdscatlen(reply,o->ptr,sdslen(o->ptr));
         listDelNode(c->reply,listFirst(c->reply));
     }
+    if (raise_error && reply[0] != '-') raise_error = 0;
     redisProtocolToLuaType(lua,reply);
     sdsfree(reply);
 
+cleanup:
     /* Clean up. Command code may have changed argv/argc so we use the
      * argv/argc of the client instead of the local variables. */
     for (j = 0; j < c->argc; j++)
         decrRefCount(c->argv[j]);
     zfree(c->argv);
 
+    if (raise_error) {
+        /* If we are here we should have an error in the stack, in the
+         * form of a table with an "err" field. Extract the string to
+         * return the plain error. */
+        lua_pushstring(lua,"err");
+        lua_gettable(lua,-2);
+        return lua_error(lua);
+    }
     return 1;
+}
+
+int luaRedisCallCommand(lua_State *lua) {
+    return luaRedisGenericCommand(lua,1);
+}
+
+int luaRedisPCallCommand(lua_State *lua) {
+    return luaRedisGenericCommand(lua,0);
 }
 
 int luaLogCommand(lua_State *lua) {
@@ -251,9 +282,31 @@ void luaMaskCountHook(lua_State *lua, lua_Debug *ar) {
     }
 }
 
+void luaLoadLib(lua_State *lua, const char *libname, lua_CFunction luafunc) {
+  lua_pushcfunction(lua, luafunc);
+  lua_pushstring(lua, libname);
+  lua_call(lua, 1, 0);
+}
+
+LUALIB_API int (luaopen_cjson) (lua_State *L);
+
+void luaLoadLibraries(lua_State *lua) {
+    luaLoadLib(lua, "", luaopen_base);
+    luaLoadLib(lua, LUA_TABLIBNAME, luaopen_table);
+    luaLoadLib(lua, LUA_STRLIBNAME, luaopen_string);
+    luaLoadLib(lua, LUA_MATHLIBNAME, luaopen_math);
+    luaLoadLib(lua, LUA_DBLIBNAME, luaopen_debug); 
+    luaLoadLib(lua, "cjson", luaopen_cjson); 
+
+#if 0 /* Stuff that we don't load currently, for sandboxing concerns. */
+    luaLoadLib(lua, LUA_LOADLIBNAME, luaopen_package);
+    luaLoadLib(lua, LUA_OSLIBNAME, luaopen_os);
+#endif
+}
+
 void scriptingInit(void) {
     lua_State *lua = lua_open();
-    luaL_openlibs(lua);
+    luaLoadLibraries(lua);
 
     /* Initialize a dictionary we use to map SHAs to scripts.
      * This is useful for replication, as we need to replicate EVALSHA
@@ -265,7 +318,12 @@ void scriptingInit(void) {
 
     /* redis.call */
     lua_pushstring(lua,"call");
-    lua_pushcfunction(lua,luaRedisCommand);
+    lua_pushcfunction(lua,luaRedisCallCommand);
+    lua_settable(lua,-3);
+
+    /* redis.pcall */
+    lua_pushstring(lua,"pcall");
+    lua_pushcfunction(lua,luaRedisPCallCommand);
     lua_settable(lua,-3);
 
     /* redis.log and log levels. */
@@ -419,6 +477,16 @@ void evalGenericCommand(redisClient *c, int evalsha) {
      * not affected by external state. */
     redisSrand48(0);
 
+    /* We set this flag to zero to remember that so far no random command
+     * was called. This way we can allow the user to call commands like
+     * SRANDMEMBER or RANDOMKEY from Lua scripts as far as no write command
+     * is called (otherwise the replication and AOF would end with non
+     * deterministic sequences).
+     *
+     * Thanks to this flag we'll raise an error every time a write command
+     * is called after a random command was used. */
+    server.lua_random_dirty = 0;
+
     /* Get the number of arguments that are keys */
     if (getLongLongFromObjectOrReply(c,c->argv[2],&numkeys,NULL) != REDIS_OK)
         return;
@@ -488,7 +556,7 @@ void evalGenericCommand(redisClient *c, int evalsha) {
         {
             int retval = dictAdd(server.lua_scripts,
                                  sdsnewlen(funcname+2,40),c->argv[1]);
-            redisAssert(retval == DICT_OK);
+            redisAssertWithInfo(c,NULL,retval == DICT_OK);
             incrRefCount(c->argv[1]);
         }
     }
@@ -540,7 +608,7 @@ void evalGenericCommand(redisClient *c, int evalsha) {
     if (evalsha) {
         robj *script = dictFetchValue(server.lua_scripts,c->argv[1]->ptr);
 
-        redisAssert(script != NULL);
+        redisAssertWithInfo(c,NULL,script != NULL);
         rewriteClientCommandArgument(c,0,
             resetRefCount(createStringObject("EVAL",4)));
         rewriteClientCommandArgument(c,1,script);

@@ -59,15 +59,16 @@
 /* Hash table parameters */
 #define REDIS_HT_MINFILL        10      /* Minimal hash table fill 10% */
 
-/* Command flags:
- *   REDIS_CMD_DENYOOM:
- *     Commands marked with this flag will return an error when 'maxmemory' is
- *     set and the server is using more than 'maxmemory' bytes of memory.
- *     In short: commands with this flag are denied on low memory conditions.
- *   REDIS_CMD_FORCE_REPLICATION:
- *     Force replication even if dirty is 0. */
-#define REDIS_CMD_DENYOOM 4
-#define REDIS_CMD_FORCE_REPLICATION 8
+/* Command flags. Please check the command table defined in the redis.c file
+ * for more information about the meaning of every flag. */
+#define REDIS_CMD_WRITE 1                   /* "w" flag */
+#define REDIS_CMD_READONLY 2                /* "r" flag */
+#define REDIS_CMD_DENYOOM 4                 /* "m" flag */
+#define REDIS_CMD_FORCE_REPLICATION 8       /* "f" flag */
+#define REDIS_CMD_ADMIN 16                  /* "a" flag */
+#define REDIS_CMD_PUBSUB 32                 /* "p" flag */
+#define REDIS_CMD_NOSCRIPT  64              /* "s" flag */
+#define REDIS_CMD_RANDOM 128                /* "R" flag */
 
 /* Object types */
 #define REDIS_STRING 0
@@ -132,6 +133,7 @@
 #define REDIS_UNBLOCKED 256 /* This client was unblocked and is stored in
                                server.unblocked_clients */
 #define REDIS_LUA_CLIENT 512 /* This is a non connected client used by Lua */
+#define REDIS_ASKING 1024   /* Client issued the ASKING command */
 
 /* Client request types */
 #define REDIS_REQ_INLINE 1
@@ -210,10 +212,9 @@
 #define REDIS_LUA_TIME_LIMIT 60000 /* milliseconds */
 
 /* We can print the stacktrace, so our assert is defined this way: */
+#define redisAssertWithInfo(_c,_o,_e) ((_e)?(void)0 : (_redisAssertWithInfo(_c,_o,#_e,__FILE__,__LINE__),_exit(1)))
 #define redisAssert(_e) ((_e)?(void)0 : (_redisAssert(#_e,__FILE__,__LINE__),_exit(1)))
 #define redisPanic(_e) _redisPanic(#_e,__FILE__,__LINE__),_exit(1)
-void _redisAssert(char *estr, char *file, int line);
-void _redisPanic(char *msg, char *file, int line);
 
 /*-----------------------------------------------------------------------------
  * Data types
@@ -445,6 +446,7 @@ typedef struct {
 #define CLUSTERMSG_TYPE_PONG 1          /* Pong (reply to Ping) */
 #define CLUSTERMSG_TYPE_MEET 2          /* Meet "let's join" message */
 #define CLUSTERMSG_TYPE_FAIL 3          /* Mark node xxx as failing */
+#define CLUSTERMSG_TYPE_PUBLISH 4       /* Pub/Sub Publish propatagion */
 
 /* Initially we don't know our "name", but we'll find it once we connect
  * to the first node, using the getsockname() function. Then we'll use this
@@ -463,16 +465,28 @@ typedef struct {
     char nodename[REDIS_CLUSTER_NAMELEN];
 } clusterMsgDataFail;
 
+typedef struct {
+    uint32_t channel_len;
+    uint32_t message_len;
+    unsigned char bulk_data[8]; /* defined as 8 just for alignment concerns. */
+} clusterMsgDataPublish;
+
 union clusterMsgData {
     /* PING, MEET and PONG */
     struct {
         /* Array of N clusterMsgDataGossip structures */
         clusterMsgDataGossip gossip[1];
     } ping;
+
     /* FAIL */
     struct {
         clusterMsgDataFail about;
     } fail;
+
+    /* PUBLISH */
+    struct {
+        clusterMsgDataPublish msg;
+    } publish;
 };
 
 typedef struct {
@@ -502,6 +516,7 @@ struct redisServer {
     int port;
     char *bindaddr;
     char *unixsocket;
+    mode_t unixsocketperm;
     int ipfd;
     int sofd;
     int cfd;
@@ -622,6 +637,8 @@ struct redisServer {
     dict *lua_scripts; /* A dictionary of SHA1 -> Lua scripts */
     long long lua_time_limit;
     long long lua_time_start;
+    int lua_random_dirty; /* True if a random command was called during the
+                             exection of the current script. */
 };
 
 typedef struct pubsubPattern {
@@ -635,7 +652,8 @@ struct redisCommand {
     char *name;
     redisCommandProc *proc;
     int arity;
-    int flags;
+    char *sflags; /* Flags as string represenation, one char per flag. */
+    int flags;    /* The actual flags, obtained from the 'sflags' field. */
     /* Use a function to determine keys arguments in a command line.
      * Used for Redis Cluster redirect. */
     redisGetKeysProc *getkeys_proc;
@@ -927,6 +945,7 @@ int pubsubUnsubscribeAllChannels(redisClient *c, int notify);
 int pubsubUnsubscribeAllPatterns(redisClient *c, int notify);
 void freePubsubPattern(void *p);
 int listMatchPubsubPattern(void *a, void *b);
+int pubsubPublishMessage(robj *channel, robj *message);
 
 /* Configuration */
 void loadServerConfig(char *filename);
@@ -973,6 +992,7 @@ clusterNode *createClusterNode(char *nodename, int flags);
 int clusterAddNode(clusterNode *node);
 void clusterCron(void);
 clusterNode *getNodeByQuery(redisClient *c, struct redisCommand *cmd, robj **argv, int argc, int *hashslot, int *ask);
+void clusterPropagatePublish(robj *channel, robj *message);
 
 /* Scripting */
 void scriptingInit(void);
@@ -1103,6 +1123,7 @@ void unwatchCommand(redisClient *c);
 void clusterCommand(redisClient *c);
 void restoreCommand(redisClient *c);
 void migrateCommand(redisClient *c);
+void askingCommand(redisClient *c);
 void dumpCommand(redisClient *c);
 void objectCommand(redisClient *c);
 void clientCommand(redisClient *c);
@@ -1115,5 +1136,10 @@ void free(void *ptr) __attribute__ ((deprecated));
 void *malloc(size_t size) __attribute__ ((deprecated));
 void *realloc(void *ptr, size_t size) __attribute__ ((deprecated));
 #endif
+
+/* Debugging stuff */
+void _redisAssertWithInfo(redisClient *c, robj *o, char *estr, char *file, int line);
+void _redisAssert(char *estr, char *file, int line);
+void _redisPanic(char *msg, char *file, int line);
 
 #endif

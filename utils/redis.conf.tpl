@@ -14,15 +14,15 @@
 
 # By default Redis does not run as a daemon. Use 'yes' if you need it.
 # Note that Redis will write a pid file in /var/run/redis.pid when daemonized.
-daemonize no
+daemonize yes
 
 # When running daemonized, Redis writes a pid file in /var/run/redis.pid by
 # default. You can specify a custom pid file location here.
-pidfile /var/run/redis.pid
+pidfile $PIDFILE
 
 # Accept connections on the specified port, default is 6379.
 # If port 0 is specified Redis will not listen on a TCP socket.
-port 6379
+port $REDIS_PORT
 
 # If you want you can bind a single interface, if the bind option is not
 # specified all the interfaces will listen for incoming connections.
@@ -34,7 +34,6 @@ port 6379
 # on a unix socket when not specified.
 #
 # unixsocket /tmp/redis.sock
-# unixsocketperm 755
 
 # Close the connection after a client is idle for N seconds (0 to disable)
 timeout 300
@@ -50,7 +49,7 @@ loglevel verbose
 # Specify the log file name. Also 'stdout' can be used to force
 # Redis to log on the standard output. Note that if you use standard
 # output for logging but daemonize, logs will be sent to /dev/null
-logfile stdout
+logfile $REDIS_LOG_FILE
 
 # To enable logging to the system logger, just set 'syslog-enabled' to yes,
 # and optionally update the other syslog parameters to suit your needs.
@@ -104,7 +103,7 @@ dbfilename dump.rdb
 # Also the Append Only File will be created inside this directory.
 # 
 # Note that you must specify a directory here, not a file name.
-dir ./
+dir $REDIS_DATA_DIR
 
 ################################# REPLICATION #################################
 
@@ -152,16 +151,16 @@ slave-serve-stale-data yes
 
 # Command renaming.
 #
-# It is possible to change the name of dangerous commands in a shared
-# environment. For instance the CONFIG command may be renamed to something
-# hard to guess so that it will be still available for internal-use
+# It is possilbe to change the name of dangerous commands in a shared
+# environment. For instance the CONFIG command may be renamed into something
+# of hard to guess so that it will be still available for internal-use
 # tools but not available for general clients.
 #
 # Example:
 #
 # rename-command CONFIG b840fc02d524045429941cc15f59e41cb7be6c52
 #
-# It is also possible to completely kill a command by renaming it to
+# It is also possilbe to completely kill a command renaming it into
 # an empty string:
 #
 # rename-command CONFIG ""
@@ -318,26 +317,7 @@ auto-aof-rewrite-min-size 64mb
 # Max execution time of a Lua script in milliseconds.
 # This prevents that a programming error generating an infinite loop will block
 # your server forever. Set it to 0 or a negative value for unlimited execution.
-lua-time-limit 60000
-
-################################ REDIS CLUSTER  ###############################
-#
-# Normal Redis instances can't be part of a Redis Cluster, only nodes that are
-# started as cluster nodes can. In order to start a Redis instance as a
-# cluster node enable the cluster support uncommenting the following:
-#
-# cluster-enabled yes
-
-# Every cluster node has a cluster configuration file. This file is not
-# intended to be edited by hand. It is created and updated by Redis nodes.
-# Every Redis Cluster node requires a different cluster configuration file.
-# Make sure that instances running in the same system does not have
-# overlapping cluster configuration file names.
-#
-# cluster-config-file nodes-6379.conf
-
-# In order to setup your cluster make sure to read the documentation
-# available at http://redis.io web site.
+#lua-time-limit 60000
 
 ################################## SLOW LOG ###################################
 

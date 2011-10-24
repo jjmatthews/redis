@@ -252,7 +252,7 @@ void sortCommand(redisClient *c) {
     } else {
         redisPanic("Unknown type");
     }
-    redisAssert(j == vectorlen);
+    redisAssertWithInfo(c,sortval,j == vectorlen);
 
     /* Now it's time to load the right scores in the sorting vector */
     if (dontsort == 0) {
@@ -278,7 +278,7 @@ void sortCommand(redisClient *c) {
                      * far. We can just cast it */
                     vector[j].u.score = (long)byval->ptr;
                 } else {
-                    redisAssert(1 != 1);
+                    redisAssertWithInfo(c,sortval,1 != 1);
                 }
             }
 
@@ -335,7 +335,8 @@ void sortCommand(redisClient *c) {
                         decrRefCount(val);
                     }
                 } else {
-                    redisAssert(sop->type == REDIS_SORT_GET); /* always fails */
+                    /* Always fails */
+                    redisAssertWithInfo(c,sortval,sop->type == REDIS_SORT_GET);
                 }
             }
         }
@@ -380,7 +381,6 @@ void sortCommand(redisClient *c) {
             for (j = start; j <= end; j++) {
                 listNode *ln;
                 listIter li;
-
                 if (!getop) {
                     listTypePush(sobj,vector[j].obj,REDIS_TAIL);
                 } else {
@@ -399,8 +399,8 @@ void sortCommand(redisClient *c) {
                             listTypePush(sobj,val,REDIS_TAIL);
                             decrRefCount(val);
                         } else {
-                            /* always fails */
-                            redisAssert(sop->type == REDIS_SORT_GET);
+                            /* Always fails */
+                            redisAssertWithInfo(c,sortval,sop->type == REDIS_SORT_GET);
                         }
                     }
                 }
