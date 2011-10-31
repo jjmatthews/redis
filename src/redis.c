@@ -217,6 +217,7 @@ struct redisCommand redisCommandTable[] = {
     {"eval",evalCommand,-3,"wms",0,zunionInterGetKeys,0,0,0,0,0},
     {"evalsha",evalShaCommand,-3,"wms",0,zunionInterGetKeys,0,0,0,0,0},
     {"slowlog",slowlogCommand,-2,"r",0,NULL,0,0,0,0,0},
+    {"script",scriptCommand,-2,"ras",0,NULL,0,0,0,0,0},
     /* stdnet commands */
     {"zdiffstore",zdiffstoreCommand,-4,"wm",0,zunionInterGetKeys,0,0,0,0,0},
     {"tslen",tslenCommand,2,"r",0,NULL,1,1,1,0,0},
@@ -802,6 +803,8 @@ void createSharedObjects(void) {
         "-NOSCRIPT No matching script. Please use EVAL.\r\n"));
     shared.loadingerr = createObject(REDIS_STRING,sdsnew(
         "-LOADING Redis is loading the dataset in memory\r\n"));
+    shared.slowscripterr = createObject(REDIS_STRING,sdsnew(
+        "-BUSY Redis is busy running a script. Please wait or stop the server with SHUTDOWN.\r\n"));
     shared.space = createObject(REDIS_STRING,sdsnew(" "));
     shared.colon = createObject(REDIS_STRING,sdsnew(":"));
     shared.plus = createObject(REDIS_STRING,sdsnew("+"));
@@ -863,7 +866,7 @@ void initServerConfig() {
     server.requirepass = NULL;
     server.rdbcompression = 1;
     server.activerehashing = 1;
-    server.maxclients = 0;
+    server.maxclients = REDIS_MAX_CLIENTS;
     server.bpop_blocked_clients = 0;
     server.maxmemory = 0;
     server.maxmemory_policy = REDIS_MAXMEMORY_VOLATILE_LRU;
@@ -876,9 +879,13 @@ void initServerConfig() {
     server.zset_max_ziplist_entries = REDIS_ZSET_MAX_ZIPLIST_ENTRIES;
     server.zset_max_ziplist_value = REDIS_ZSET_MAX_ZIPLIST_VALUE;
     server.shutdown_asap = 0;
+    server.repl_ping_slave_period = REDIS_REPL_PING_SLAVE_PERIOD;
+    server.repl_timeout = REDIS_REPL_TIMEOUT;
     server.cluster_enabled = 0;
     server.cluster.configfile = zstrdup("nodes.conf");
     server.lua_time_limit = REDIS_LUA_TIME_LIMIT;
+    server.lua_client = NULL;
+    server.lua_timedout = 0;
 
     updateLRUClock();
     resetServerSaveParams();
@@ -1005,6 +1012,39 @@ void initServer() {
     slowlogInit();
     bioInit();
     srand(time(NULL)^getpid());
+
+    /* Try to raise the max number of open files accordingly to the
+     * configured max number of clients. Also account for 32 additional
+     * file descriptors as we need a few more for persistence, listening
+     * sockets, log files and so forth. */
+    {
+        rlim_t maxfiles = server.maxclients+32;
+        struct rlimit limit;
+
+        if (maxfiles < 1024) maxfiles = 1024;
+        if (getrlimit(RLIMIT_NOFILE,&limit) == -1) {
+            redisLog(REDIS_WARNING,"Unable to obtain the current NOFILE limit (%s), assuming 1024 and setting the max clients configuration accordingly.",
+                strerror(errno));
+            server.maxclients = 1024-32;
+        } else {
+            rlim_t oldlimit = limit.rlim_cur;
+
+            /* Set the max number of files if the current limit is not enough
+             * for our needs. */
+            if (oldlimit < maxfiles) {
+                limit.rlim_cur = maxfiles;
+                limit.rlim_max = maxfiles;
+                if (setrlimit(RLIMIT_NOFILE,&limit) == -1) {
+                    server.maxclients = oldlimit-32;
+                    redisLog(REDIS_WARNING,"Unable to set the max number of files limit to %d (%s), setting the max clients configuration to %d.",
+                        (int) maxfiles, strerror(errno), (int) server.maxclients);
+                } else {
+                    redisLog(REDIS_NOTICE,"Max number of open files set to %d",
+                        (int) maxfiles);
+                }
+            }
+        }
+    }
 }
 
 /* Populates the Redis Command Table starting from the hard coded list
@@ -1188,6 +1228,12 @@ int processCommand(redisClient *c) {
     /* Loading DB? Return an error if the command is not INFO */
     if (server.loading && c->cmd->proc != infoCommand) {
         addReply(c, shared.loadingerr);
+        return REDIS_OK;
+    }
+
+    /* Lua script too slow? */
+    if (server.lua_timedout && c->cmd->proc != shutdownCommand) {
+        addReply(c, shared.slowscripterr);
         return REDIS_OK;
     }
 

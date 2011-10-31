@@ -10,8 +10,6 @@
 
 #include "redis.h"
 
-#define REDIS_TS 5
-
 /*
  * 7 TIMESERIES COMMANDS
  */

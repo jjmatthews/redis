@@ -273,13 +273,15 @@ int luaLogCommand(lua_State *lua) {
 void luaMaskCountHook(lua_State *lua, lua_Debug *ar) {
     long long elapsed;
     REDIS_NOTUSED(ar);
+    REDIS_NOTUSED(lua);
 
     elapsed = (ustime()/1000) - server.lua_time_start;
-    if (elapsed >= server.lua_time_limit) {
-        redisLog(REDIS_NOTICE,"Lua script aborted for max execution time after %lld milliseconds of running time.",elapsed);
-        lua_pushstring(lua,"Script aborted for max execution time.");
-        lua_error(lua);
+    if (elapsed >= server.lua_time_limit && server.lua_timedout == 0) {
+        redisLog(REDIS_WARNING,"Lua slow script detected: still in execution after %lld milliseconds. You can shut down the server using the SHUTDOWN command.",elapsed);
+        server.lua_timedout = 1;
     }
+    if (server.lua_timedout)
+        aeProcessEvents(server.el, AE_FILE_EVENTS|AE_DONT_WAIT);
 }
 
 void luaLoadLib(lua_State *lua, const char *libname, lua_CFunction luafunc) {
@@ -304,6 +306,10 @@ void luaLoadLibraries(lua_State *lua) {
 #endif
 }
 
+/* Initialize the scripting environment.
+ * It is possible to call this function to reset the scripting environment
+ * assuming that we call scriptingRelease() before.
+ * See scriptingReset() for more information. */
 void scriptingInit(void) {
     lua_State *lua = lua_open();
     luaLoadLibraries(lua);
@@ -364,11 +370,27 @@ void scriptingInit(void) {
     lua_setglobal(lua,"math");
 
     /* Create the (non connected) client that we use to execute Redis commands
-     * inside the Lua interpreter */
-    server.lua_client = createClient(-1);
-    server.lua_client->flags |= REDIS_LUA_CLIENT;
+     * inside the Lua interpreter.
+     * Note: there is no need to create it again when this function is called
+     * by scriptingReset(). */
+    if (server.lua_client == NULL) {
+        server.lua_client = createClient(-1);
+        server.lua_client->flags |= REDIS_LUA_CLIENT;
+    }
 
     server.lua = lua;
+}
+
+/* Release resources related to Lua scripting.
+ * This function is used in order to reset the scripting environment. */
+void scriptingRelease(void) {
+    dictRelease(server.lua_scripts);
+    lua_close(server.lua);
+}
+
+void scriptingReset(void) {
+    scriptingRelease();
+    scriptingInit();
 }
 
 /* Hash the scripit into a SHA1 digest. We use this as Lua function name.
@@ -468,6 +490,51 @@ void luaSetGlobalArray(lua_State *lua, char *var, robj **elev, int elec) {
     lua_setglobal(lua,var);
 }
 
+/* Define a lua function with the specified function name and body.
+ * The function name musts be a 2 characters long string, since all the
+ * functions we defined in the Lua context are in the form:
+ *
+ *   f_<hex sha1 sum>
+ *
+ * On success REDIS_OK is returned, and nothing is left on the Lua stack.
+ * On error REDIS_ERR is returned and an appropriate error is set in the
+ * client context. */
+int luaCreateFunction(redisClient *c, lua_State *lua, char *funcname, robj *body) {
+    sds funcdef = sdsempty();
+
+    funcdef = sdscat(funcdef,"function ");
+    funcdef = sdscatlen(funcdef,funcname,42);
+    funcdef = sdscatlen(funcdef," ()\n",4);
+    funcdef = sdscatlen(funcdef,body->ptr,sdslen(body->ptr));
+    funcdef = sdscatlen(funcdef,"\nend\n",5);
+
+    if (luaL_loadbuffer(lua,funcdef,sdslen(funcdef),"func definition")) {
+        addReplyErrorFormat(c,"Error compiling script (new function): %s\n",
+            lua_tostring(lua,-1));
+        lua_pop(lua,1);
+        sdsfree(funcdef);
+        return REDIS_ERR;
+    }
+    sdsfree(funcdef);
+    if (lua_pcall(lua,0,0,0)) {
+        addReplyErrorFormat(c,"Error running script (new function): %s\n",
+            lua_tostring(lua,-1));
+        lua_pop(lua,1);
+        return REDIS_ERR;
+    }
+
+    /* We also save a SHA1 -> Original script map in a dictionary
+     * so that we can replicate / write in the AOF all the
+     * EVALSHA commands as EVAL using the original script. */
+    {
+        int retval = dictAdd(server.lua_scripts,
+                             sdsnewlen(funcname+2,40),body);
+        redisAssertWithInfo(c,NULL,retval == DICT_OK);
+        incrRefCount(body);
+    }
+    return REDIS_OK;
+}
+
 void evalGenericCommand(redisClient *c, int evalsha) {
     lua_State *lua = server.lua;
     char funcname[43];
@@ -512,53 +579,21 @@ void evalGenericCommand(redisClient *c, int evalsha) {
         funcname[42] = '\0';
     }
 
+    /* Try to lookup the Lua function */
     lua_getglobal(lua, funcname);
     if (lua_isnil(lua,1)) {
-        sds funcdef;
-      
+        lua_pop(lua,1); /* remove the nil from the stack */
         /* Function not defined... let's define it if we have the
          * body of the funciton. If this is an EVALSHA call we can just
          * return an error. */
         if (evalsha) {
             addReply(c, shared.noscripterr);
-            lua_pop(lua,1); /* remove the nil from the stack */
             return;
         }
-        funcdef = sdsempty();
-
-        lua_pop(lua,1); /* remove the nil from the stack */
-        funcdef = sdscat(funcdef,"function ");
-        funcdef = sdscatlen(funcdef,funcname,42);
-        funcdef = sdscatlen(funcdef," ()\n",4);
-        funcdef = sdscatlen(funcdef,c->argv[1]->ptr,sdslen(c->argv[1]->ptr));
-        funcdef = sdscatlen(funcdef,"\nend\n",5);
-        /* printf("Defining:\n%s\n",funcdef); */
-
-        if (luaL_loadbuffer(lua,funcdef,sdslen(funcdef),"func definition")) {
-            addReplyErrorFormat(c,"Error compiling script (new function): %s\n",
-                lua_tostring(lua,-1));
-            lua_pop(lua,1);
-            sdsfree(funcdef);
-            return;
-        }
-        sdsfree(funcdef);
-        if (lua_pcall(lua,0,0,0)) {
-            addReplyErrorFormat(c,"Error running script (new function): %s\n",
-                lua_tostring(lua,-1));
-            lua_pop(lua,1);
-            return;
-        }
+        if (luaCreateFunction(c,lua,funcname,c->argv[1]) == REDIS_ERR) return;
+        /* Now the following is guaranteed to return non nil */
         lua_getglobal(lua, funcname);
-
-        /* We also save a SHA1 -> Original script map in a dictionary
-         * so that we can replicate / write in the AOF all the
-         * EVALSHA commands as EVAL using the original script. */
-        {
-            int retval = dictAdd(server.lua_scripts,
-                                 sdsnewlen(funcname+2,40),c->argv[1]);
-            redisAssertWithInfo(c,NULL,retval == DICT_OK);
-            incrRefCount(c->argv[1]);
-        }
+        redisAssert(!lua_isnil(lua,1));
     }
 
     /* Populate the argv and keys table accordingly to the arguments that
@@ -573,7 +608,7 @@ void evalGenericCommand(redisClient *c, int evalsha) {
      * is running for too much time.
      * We set the hook only if the time limit is enabled as the hook will
      * make the Lua script execution slower. */
-    if (server.lua_time_limit > 0) {
+    if (server.lua_time_limit > 0 && server.masterhost == NULL) {
         lua_sethook(lua,luaMaskCountHook,LUA_MASKCOUNT,100000);
         server.lua_time_start = ustime()/1000;
     } else {
@@ -584,6 +619,7 @@ void evalGenericCommand(redisClient *c, int evalsha) {
      * already defined, we can call it. We have zero arguments and expect
      * a single return value. */
     if (lua_pcall(lua,0,1,0)) {
+        server.lua_timedout = 0;
         selectDb(c,server.lua_client->db->id); /* set DB ID from Lua client */
         addReplyErrorFormat(c,"Error running script (call to %s): %s\n",
             funcname, lua_tostring(lua,-1));
@@ -591,6 +627,7 @@ void evalGenericCommand(redisClient *c, int evalsha) {
         lua_gc(lua,LUA_GCCOLLECT,0);
         return;
     }
+    server.lua_timedout = 0;
     selectDb(c,server.lua_client->db->id); /* set DB ID from Lua client */
     luaReplyToRedisReply(c,lua);
     lua_gc(lua,LUA_GCSTEP,1);
@@ -668,4 +705,45 @@ int redis_math_random (lua_State *L) {
 int redis_math_randomseed (lua_State *L) {
   redisSrand48(luaL_checkint(L, 1));
   return 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * SCRIPT command for script environment introspection and control
+ * ------------------------------------------------------------------------- */
+
+void scriptCommand(redisClient *c) {
+    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"flush")) {
+        scriptingReset();
+        addReply(c,shared.ok);
+        server.dirty++; /* Replicating this command is a good idea. */
+    } else if (c->argc >= 2 && !strcasecmp(c->argv[1]->ptr,"exists")) {
+        int j;
+
+        addReplyMultiBulkLen(c, c->argc-2);
+        for (j = 2; j < c->argc; j++) {
+            if (dictFind(server.lua_scripts,c->argv[j]->ptr))
+                addReply(c,shared.cone);
+            else
+                addReply(c,shared.czero);
+        }
+    } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr,"load")) {
+        char funcname[43];
+        sds sha;
+
+        funcname[0] = 'f';
+        funcname[1] = '_';
+        hashScript(funcname+2,c->argv[2]->ptr,sdslen(c->argv[2]->ptr));
+        sha = sdsnewlen(funcname+2,40);
+        if (dictFind(server.lua_scripts,sha) == NULL) {
+            if (luaCreateFunction(c,server.lua,funcname,c->argv[2])
+                    == REDIS_ERR) {
+                sdsfree(sha);
+                return;
+            }
+        }
+        addReplyBulkCBuffer(c,funcname+2,40);
+        sdsfree(sha);
+    } else {
+        addReplyError(c, "Unknown SCRIPT subcommand or wrong # of args.");
+    }
 }

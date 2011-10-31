@@ -420,6 +420,8 @@ int rdbSaveObjectType(rio *rdb, robj *o) {
             return rdbSaveType(rdb,REDIS_RDB_TYPE_HASH);
         else
             redisPanic("Unknown hash encoding");
+    case REDIS_TS:
+        return rdbSaveType(rdb,REDIS_RDB_TYPE_TS);
     default:
         redisPanic("Unknown object type");
     }
@@ -924,7 +926,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
                 redisPanic("Unknown encoding");
                 break;
         }
-    } else if (rdbtype == REDIS_TS) {
+    } else if (rdbtype == REDIS_RDB_TYPE_TS) {
     	size_t zsetlen;
     	robj *value;
 		double score;

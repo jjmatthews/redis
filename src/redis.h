@@ -55,6 +55,10 @@
 #define REDIS_AUTO_AOFREWRITE_MIN_SIZE (1024*1024)
 #define REDIS_SLOWLOG_LOG_SLOWER_THAN 10000
 #define REDIS_SLOWLOG_MAX_LEN 64
+#define REDIS_MAX_CLIENTS 10000
+
+#define REDIS_REPL_TIMEOUT 60
+#define REDIS_REPL_PING_SLAVE_PERIOD 10
 
 /* Hash table parameters */
 #define REDIS_HT_MINFILL        10      /* Minimal hash table fill 10% */
@@ -76,6 +80,7 @@
 #define REDIS_SET 2
 #define REDIS_ZSET 3
 #define REDIS_HASH 4
+#define REDIS_TS 5
 #define REDIS_VMPOINTER 8
 
 /* Objects encoding. Some kind of objects like Strings and Hashes can be
@@ -209,7 +214,7 @@
 #define REDIS_MAXMEMORY_NO_EVICTION 5
 
 /* Scripting */
-#define REDIS_LUA_TIME_LIMIT 60000 /* milliseconds */
+#define REDIS_LUA_TIME_LIMIT 5000 /* milliseconds */
 
 /* We can print the stacktrace, so our assert is defined this way: */
 #define redisAssertWithInfo(_c,_o,_e) ((_e)?(void)0 : (_redisAssertWithInfo(_c,_o,#_e,__FILE__,__LINE__),_exit(1)))
@@ -232,32 +237,7 @@ typedef struct redisObject {
     unsigned lru:22;        /* lru time (relative to server.lruclock) */
     int refcount;
     void *ptr;
-    /* VM fields are only allocated if VM is active, otherwise the
-     * object allocation function will just allocate
-     * sizeof(redisObjct) minus sizeof(redisObjectVM), so using
-     * Redis without VM active will not have any overhead. */
 } robj;
-
-/* The VM pointer structure - identifies an object in the swap file.
- *
- * This object is stored in place of the value
- * object in the main key->value hash table representing a database.
- * Note that the first fields (type, storage) are the same as the redisObject
- * structure so that vmPointer strucuters can be accessed even when casted
- * as redisObject structures.
- *
- * This is useful as we don't know if a value object is or not on disk, but we
- * are always able to read obj->storage to check this. For vmPointer
- * structures "type" is set to REDIS_VMPOINTER (even if without this field
- * is still possible to check the kind of object from the value of 'storage').*/
-typedef struct vmPointer {
-    unsigned type:4;
-    unsigned storage:2; /* REDIS_VM_SWAPPED or REDIS_VM_LOADING */
-    unsigned notused:26;
-    unsigned int vtype; /* type of the object stored in the swap file */
-    off_t page;         /* the page at witch the object is stored on disk */
-    off_t usedpages;    /* number of pages used on disk */
-} vmpointer;
 
 /* Macro used to initalize a Redis object allocated on the stack.
  * Note that this macro is taken near the structure definition to make sure
@@ -345,7 +325,7 @@ struct sharedObjectsStruct {
     robj *crlf, *ok, *err, *emptybulk, *czero, *cone, *cnegone, *pong, *space,
     *colon, *nullbulk, *nullmultibulk, *queued,
     *emptymultibulk, *wrongtypeerr, *nokeyerr, *syntaxerr, *sameobjecterr,
-    *outofrangeerr, *noscripterr, *loadingerr, *plus,
+    *outofrangeerr, *noscripterr, *loadingerr, *slowscripterr, *plus,
     *select0, *select1, *select2, *select3, *select4,
     *select5, *select6, *select7, *select8, *select9,
     *messagebulk, *pmessagebulk, *subscribebulk, *unsubscribebulk, *mbulk3,
@@ -590,6 +570,8 @@ struct redisServer {
     char *masterauth;
     char *masterhost;
     int masterport;
+    int repl_ping_slave_period;
+    int repl_timeout;
     redisClient *master;    /* client that is master for this slave */
     int repl_syncio_timeout; /* timeout for synchronous I/O calls */
     int replstate;          /* replication status if the instance is a slave */
@@ -639,6 +621,8 @@ struct redisServer {
     long long lua_time_start;
     int lua_random_dirty; /* True if a random command was called during the
                              exection of the current script. */
+    int lua_timedout;     /* True if we reached the time limit for script
+                             execution. */
 };
 
 typedef struct pubsubPattern {
@@ -1129,6 +1113,7 @@ void objectCommand(redisClient *c);
 void clientCommand(redisClient *c);
 void evalCommand(redisClient *c);
 void evalShaCommand(redisClient *c);
+void scriptCommand(redisClient *c);
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__ ((deprecated));
