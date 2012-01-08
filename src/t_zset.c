@@ -77,6 +77,7 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj) {
     unsigned int rank[ZSKIPLIST_MAXLEVEL];
     int i, level;
 
+    redisAssert(!isnan(score));
     x = zsl->header;
     for (i = zsl->level-1; i >= 0; i--) {
         /* store rank that is crossed to reach the insert position */
@@ -901,8 +902,8 @@ void zaddGenericCommand(redisClient *c, int incr) {
             ele = c->argv[3+j*2] = tryObjectEncoding(c->argv[3+j*2]);
             de = dictFind(zs->dict,ele);
             if (de != NULL) {
-                curobj = dictGetEntryKey(de);
-                curscore = *(double*)dictGetEntryVal(de);
+                curobj = dictGetKey(de);
+                curscore = *(double*)dictGetVal(de);
 
                 if (incr) {
                     score += curscore;
@@ -922,7 +923,7 @@ void zaddGenericCommand(redisClient *c, int incr) {
                     redisAssertWithInfo(c,curobj,zslDelete(zs->zsl,curscore,curobj));
                     znode = zslInsert(zs->zsl,score,curobj);
                     incrRefCount(curobj); /* Re-inserted in skiplist. */
-                    dictGetEntryVal(de) = &znode->score; /* Update score ptr. */
+                    dictGetVal(de) = &znode->score; /* Update score ptr. */
 
                     signalModifiedKey(c->db,key);
                     server.dirty++;
@@ -988,7 +989,7 @@ void zremCommand(redisClient *c) {
                 deleted++;
 
                 /* Delete from the skiplist */
-                score = *(double*)dictGetEntryVal(de);
+                score = *(double*)dictGetVal(de);
                 redisAssertWithInfo(c,c->argv[j],zslDelete(zs->zsl,score,c->argv[j]));
 
                 /* Delete from the hash table */
@@ -1019,7 +1020,7 @@ void zremrangebyscoreCommand(redisClient *c) {
 
     /* Parse the range arguments. */
     if (zslParseRange(c->argv[2],c->argv[3],&range) != REDIS_OK) {
-        addReplyError(c,"min or max is not a double");
+        addReplyError(c,"min or max is not a float");
         return;
     }
 
@@ -1264,7 +1265,7 @@ int zuiNext(zsetopsrc *op, zsetopval *val) {
         } else if (op->encoding == REDIS_ENCODING_HT) {
             if (it->ht.de == NULL)
                 return 0;
-            val->ele = dictGetEntryKey(it->ht.de);
+            val->ele = dictGetKey(it->ht.de);
             val->score = 1.0;
 
             /* Move to next element. */
@@ -1398,7 +1399,7 @@ int zuiFind(zsetopsrc *op, zsetopval *val, double *score) {
         } else if (op->encoding == REDIS_ENCODING_SKIPLIST) {
             dictEntry *de;
             if ((de = dictFind(it->sl.zs->dict,val->ele)) != NULL) {
-                *score = *(double*)dictGetEntryVal(de);
+                *score = *(double*)dictGetVal(de);
                 return 1;
             } else {
                 return 0;
@@ -1418,7 +1419,7 @@ int zuiCompareByCardinality(const void *s1, const void *s2) {
 #define REDIS_AGGR_SUM 1
 #define REDIS_AGGR_MIN 2
 #define REDIS_AGGR_MAX 3
-#define zunionInterDictValue(_e) (dictGetEntryVal(_e) == NULL ? 1.0 : *(double*)dictGetEntryVal(_e))
+#define zunionInterDictValue(_e) (dictGetVal(_e) == NULL ? 1.0 : *(double*)dictGetVal(_e))
 
 inline static void zunionInterAggregate(double *target, double val, int aggregate) {
     if (aggregate == REDIS_AGGR_SUM) {
@@ -1438,7 +1439,8 @@ inline static void zunionInterAggregate(double *target, double val, int aggregat
 }
 
 void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
-    int i, j, setnum;
+    int i, j;
+    long setnum;
     int aggregate = REDIS_AGGR_SUM;
     zsetopsrc *src;
     zsetopval zval;
@@ -1451,7 +1453,9 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
     int withscores = 0;
 
     /* expect setnum input keys to be given */
-    setnum = atoi(c->argv[2]->ptr);
+    if ((getLongFromObjectOrReply(c, c->argv[2], &setnum, NULL) != REDIS_OK))
+        return;
+
     if (setnum < 1) {
         addReplyError(c,
             "at least 1 input key is needed for ZUNIONSTORE/ZINTERSTORE/DIFFSTORE");
@@ -1498,7 +1502,7 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
                 j++; remaining--;
                 for (i = 0; i < setnum; i++, j++, remaining--) {
                     if (getDoubleFromObjectOrReply(c,c->argv[j],&src[i].weight,
-                            "weight value is not a double") != REDIS_OK)
+                            "weight value is not a float") != REDIS_OK)
                     {
                         zfree(src);
                         return;
@@ -1548,6 +1552,8 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
                 double score, value;
 
                 score = src[0].weight * zval.score;
+                if (isnan(score)) score = 0;
+
                 for (j = 1; j < setnum; j++) {
                     /* It is not safe to access the zset we are
                      * iterating, so explicitly check for equal object. */
@@ -1590,6 +1596,7 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
 
                 /* Initialize score */
                 score = src[i].weight * zval.score;
+                if (isnan(score)) score = 0;
 
                 /* Because the inputs are sorted by size, it's only possible
                  * for sets at larger indices to hold this element. */
@@ -1637,7 +1644,7 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
                     if (withscores) {
                         deleted = zslDelete(dstzset->zsl, score, tmp);
                     } else {
-                        deleted = zslDelete(dstzset->zsl, *(double *)dictGetEntryVal(dstde), tmp);
+                        deleted = zslDelete(dstzset->zsl, *(double *)dictGetVal(dstde), tmp);
                     }
 
                     if (deleted != 0)
@@ -1806,7 +1813,7 @@ void genericZrangebyscoreCommand(redisClient *c, int reverse) {
     zrangespec range;
     robj *key = c->argv[1];
     robj *zobj;
-    int offset = 0, limit = -1;
+    long offset = 0, limit = -1;
     int withscores = 0;
     unsigned long rangelen = 0;
     void *replylen = NULL;
@@ -1822,7 +1829,7 @@ void genericZrangebyscoreCommand(redisClient *c, int reverse) {
     }
 
     if (zslParseRange(c->argv[minidx],c->argv[maxidx],&range) != REDIS_OK) {
-        addReplyError(c,"min or max is not a double");
+        addReplyError(c,"min or max is not a float");
         return;
     }
 
@@ -1837,8 +1844,8 @@ void genericZrangebyscoreCommand(redisClient *c, int reverse) {
                 pos++; remaining--;
                 withscores = 1;
             } else if (remaining >= 3 && !strcasecmp(c->argv[pos]->ptr,"limit")) {
-                offset = atoi(c->argv[pos+1]->ptr);
-                limit = atoi(c->argv[pos+2]->ptr);
+                if ((getLongFromObjectOrReply(c, c->argv[pos+1], &offset, NULL) != REDIS_OK) ||
+                    (getLongFromObjectOrReply(c, c->argv[pos+2], &limit, NULL) != REDIS_OK)) return;
                 pos += 3; remaining -= 3;
             } else {
                 addReply(c,shared.syntaxerr);
@@ -2004,7 +2011,7 @@ void zcountCommand(redisClient *c) {
 
     /* Parse the range arguments */
     if (zslParseRange(c->argv[2],c->argv[3],&range) != REDIS_OK) {
-        addReplyError(c,"min or max is not a double");
+        addReplyError(c,"min or max is not a float");
         return;
     }
 
@@ -2103,7 +2110,7 @@ void zscoreCommand(redisClient *c) {
         c->argv[2] = tryObjectEncoding(c->argv[2]);
         de = dictFind(zs->dict,c->argv[2]);
         if (de != NULL) {
-            score = *(double*)dictGetEntryVal(de);
+            score = *(double*)dictGetVal(de);
             addReplyDouble(c,score);
         } else {
             addReply(c,shared.nullbulk);
@@ -2159,7 +2166,7 @@ void zrankGenericCommand(redisClient *c, int reverse) {
         ele = c->argv[2] = tryObjectEncoding(c->argv[2]);
         de = dictFind(zs->dict,ele);
         if (de != NULL) {
-            score = *(double*)dictGetEntryVal(de);
+            score = *(double*)dictGetVal(de);
             rank = zslGetRank(zsl,score,ele);
             redisAssertWithInfo(c,ele,rank); /* Existing elements always have a rank. */
             if (reverse)

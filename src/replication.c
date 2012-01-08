@@ -89,7 +89,7 @@ void syncCommand(redisClient *c) {
 
     /* Refuse SYNC requests if we are a slave but the link with our master
      * is not ok... */
-    if (server.masterhost && server.replstate != REDIS_REPL_CONNECTED) {
+    if (server.masterhost && server.repl_state != REDIS_REPL_CONNECTED) {
         addReplyError(c,"Can't SYNC while not connected with my master");
         return;
     }
@@ -106,7 +106,7 @@ void syncCommand(redisClient *c) {
     redisLog(REDIS_NOTICE,"Slave ask for synchronization");
     /* Here we need to check if there is a background saving operation
      * in progress, or if it is required to start one */
-    if (server.bgsavechildpid != -1) {
+    if (server.rdb_child_pid != -1) {
         /* Ok a background save is in progress. Let's check if it is a good
          * one for replication, i.e. if there is another slave that is
          * registering differences since the server forked to save */
@@ -122,8 +122,7 @@ void syncCommand(redisClient *c) {
         if (ln) {
             /* Perfect, the server is already registering differences for
              * another slave. Set the right state, and copy the buffer. */
-            listRelease(c->reply);
-            c->reply = listDup(slave->reply);
+            copyClientOutputBuffer(c,slave);
             c->replstate = REDIS_REPL_WAIT_BGSAVE_END;
             redisLog(REDIS_NOTICE,"Waiting for end of BGSAVE for SYNC");
         } else {
@@ -135,7 +134,7 @@ void syncCommand(redisClient *c) {
     } else {
         /* Ok we don't have a BGSAVE in progress, let's start one */
         redisLog(REDIS_NOTICE,"Starting BGSAVE for SYNC");
-        if (rdbSaveBackground(server.dbfilename) != REDIS_OK) {
+        if (rdbSaveBackground(server.rdb_filename) != REDIS_OK) {
             redisLog(REDIS_NOTICE,"Replication failed, can't BGSAVE");
             addReplyError(c,"Unable to perform background save");
             return;
@@ -229,7 +228,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr) {
                 redisLog(REDIS_WARNING,"SYNC failed. BGSAVE child returned an error");
                 continue;
             }
-            if ((slave->repldbfd = open(server.dbfilename,O_RDONLY)) == -1 ||
+            if ((slave->repldbfd = open(server.rdb_filename,O_RDONLY)) == -1 ||
                 redis_fstat(slave->repldbfd,&buf) == -1) {
                 freeClient(slave);
                 redisLog(REDIS_WARNING,"SYNC failed. Can't open/stat DB after BGSAVE: %s", strerror(errno));
@@ -246,7 +245,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr) {
         }
     }
     if (startbgsave) {
-        if (rdbSaveBackground(server.dbfilename) != REDIS_OK) {
+        if (rdbSaveBackground(server.rdb_filename) != REDIS_OK) {
             listIter li;
 
             listRewind(server.slaves,&li);
@@ -265,14 +264,14 @@ void updateSlavesWaitingBgsave(int bgsaveerr) {
 
 /* Abort the async download of the bulk dataset while SYNC-ing with master */
 void replicationAbortSyncTransfer(void) {
-    redisAssert(server.replstate == REDIS_REPL_TRANSFER);
+    redisAssert(server.repl_state == REDIS_REPL_TRANSFER);
 
     aeDeleteFileEvent(server.el,server.repl_transfer_s,AE_READABLE);
     close(server.repl_transfer_s);
     close(server.repl_transfer_fd);
     unlink(server.repl_transfer_tmpfile);
     zfree(server.repl_transfer_tmpfile);
-    server.replstate = REDIS_REPL_CONNECT;
+    server.repl_state = REDIS_REPL_CONNECT;
 }
 
 /* Asynchronously read the SYNC payload we receive from a master */
@@ -333,7 +332,7 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
     server.repl_transfer_left -= nread;
     /* Check if the transfer is now complete */
     if (server.repl_transfer_left == 0) {
-        if (rename(server.repl_transfer_tmpfile,server.dbfilename) == -1) {
+        if (rename(server.repl_transfer_tmpfile,server.rdb_filename) == -1) {
             redisLog(REDIS_WARNING,"Failed trying to rename the temp DB into dump.rdb in MASTER <-> SLAVE synchronization: %s", strerror(errno));
             replicationAbortSyncTransfer();
             return;
@@ -345,7 +344,7 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
          * rdbLoad() will call the event loop to process events from time to
          * time for non blocking loading. */
         aeDeleteFileEvent(server.el,server.repl_transfer_s,AE_READABLE);
-        if (rdbLoad(server.dbfilename) != REDIS_OK) {
+        if (rdbLoad(server.rdb_filename) != REDIS_OK) {
             redisLog(REDIS_WARNING,"Failed trying to load the MASTER synchronization DB from disk");
             replicationAbortSyncTransfer();
             return;
@@ -356,10 +355,24 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
         server.master = createClient(server.repl_transfer_s);
         server.master->flags |= REDIS_MASTER;
         server.master->authenticated = 1;
-        server.replstate = REDIS_REPL_CONNECTED;
+        server.repl_state = REDIS_REPL_CONNECTED;
         redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Finished with success");
-        /* Rewrite the AOF file now that the dataset changed. */
-        if (server.appendonly) rewriteAppendOnlyFileBackground();
+        /* Restart the AOF subsystem now that we finished the sync. This
+         * will trigger an AOF rewrite, and when done will start appending
+         * to the new file. */
+        if (server.aof_state != REDIS_AOF_OFF) {
+            int retry = 10;
+
+            stopAppendOnly();
+            while (retry-- && startAppendOnly() == REDIS_ERR) {
+                redisLog(REDIS_WARNING,"Failed enabling the AOF after successful master synchrnization! Trying it again in one second.");
+                sleep(1);
+            }
+            if (!retry) {
+                redisLog(REDIS_WARNING,"FATAL: this slave instance finished the synchronization with its master, but the AOF can't be turned on. Exiting now.");
+                exit(1);
+            }
+        }
     }
 
     return;
@@ -378,7 +391,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
 
     /* If this event fired after the user turned the instance into a master
      * with SLAVEOF NO ONE we must just return ASAP. */
-    if (server.replstate == REDIS_REPL_NONE) {
+    if (server.repl_state == REDIS_REPL_NONE) {
         close(fd);
         return;
     }
@@ -440,7 +453,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
         goto error;
     }
 
-    server.replstate = REDIS_REPL_TRANSFER;
+    server.repl_state = REDIS_REPL_TRANSFER;
     server.repl_transfer_left = -1;
     server.repl_transfer_fd = dfd;
     server.repl_transfer_lastio = time(NULL);
@@ -448,7 +461,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
     return;
 
 error:
-    server.replstate = REDIS_REPL_CONNECT;
+    server.repl_state = REDIS_REPL_CONNECT;
     close(fd);
     return;
 }
@@ -471,9 +484,22 @@ int connectWithMaster(void) {
         return REDIS_ERR;
     }
 
+    server.repl_transfer_lastio = time(NULL);
     server.repl_transfer_s = fd;
-    server.replstate = REDIS_REPL_CONNECTING;
+    server.repl_state = REDIS_REPL_CONNECTING;
     return REDIS_OK;
+}
+
+/* This function can be called when a non blocking connection is currently
+ * in progress to undo it. */
+void undoConnectWithMaster(void) {
+    int fd = server.repl_transfer_s;
+
+    redisAssert(server.repl_state == REDIS_REPL_CONNECTING);
+    aeDeleteFileEvent(server.el,fd,AE_READABLE|AE_WRITABLE);
+    close(fd);
+    server.repl_transfer_s = -1;
+    server.repl_state = REDIS_REPL_CONNECT;
 }
 
 void slaveofCommand(redisClient *c) {
@@ -483,9 +509,11 @@ void slaveofCommand(redisClient *c) {
             sdsfree(server.masterhost);
             server.masterhost = NULL;
             if (server.master) freeClient(server.master);
-            if (server.replstate == REDIS_REPL_TRANSFER)
+            if (server.repl_state == REDIS_REPL_TRANSFER)
                 replicationAbortSyncTransfer();
-            server.replstate = REDIS_REPL_NONE;
+            else if (server.repl_state == REDIS_REPL_CONNECTING)
+                undoConnectWithMaster();
+            server.repl_state = REDIS_REPL_NONE;
             redisLog(REDIS_NOTICE,"MASTER MODE enabled (user request)");
         }
     } else {
@@ -493,9 +521,9 @@ void slaveofCommand(redisClient *c) {
         server.masterhost = sdsdup(c->argv[1]->ptr);
         server.masterport = atoi(c->argv[2]->ptr);
         if (server.master) freeClient(server.master);
-        if (server.replstate == REDIS_REPL_TRANSFER)
+        if (server.repl_state == REDIS_REPL_TRANSFER)
             replicationAbortSyncTransfer();
-        server.replstate = REDIS_REPL_CONNECT;
+        server.repl_state = REDIS_REPL_CONNECT;
         redisLog(REDIS_NOTICE,"SLAVE OF %s:%d enabled (user request)",
             server.masterhost, server.masterport);
     }
@@ -505,8 +533,16 @@ void slaveofCommand(redisClient *c) {
 /* --------------------------- REPLICATION CRON  ---------------------------- */
 
 void replicationCron(void) {
+    /* Non blocking connection timeout? */
+    if (server.masterhost && server.repl_state == REDIS_REPL_CONNECTING &&
+        (time(NULL)-server.repl_transfer_lastio) > server.repl_timeout)
+    {
+        redisLog(REDIS_WARNING,"Timeout connecting to the MASTER...");
+        undoConnectWithMaster();
+    }
+
     /* Bulk transfer I/O timeout? */
-    if (server.masterhost && server.replstate == REDIS_REPL_TRANSFER &&
+    if (server.masterhost && server.repl_state == REDIS_REPL_TRANSFER &&
         (time(NULL)-server.repl_transfer_lastio) > server.repl_timeout)
     {
         redisLog(REDIS_WARNING,"Timeout receiving bulk data from MASTER...");
@@ -514,7 +550,7 @@ void replicationCron(void) {
     }
 
     /* Timed out master when we are an already connected slave? */
-    if (server.masterhost && server.replstate == REDIS_REPL_CONNECTED &&
+    if (server.masterhost && server.repl_state == REDIS_REPL_CONNECTED &&
         (time(NULL)-server.master->lastinteraction) > server.repl_timeout)
     {
         redisLog(REDIS_WARNING,"MASTER time out: no data nor PING received...");
@@ -522,7 +558,7 @@ void replicationCron(void) {
     }
 
     /* Check if we should connect to a MASTER */
-    if (server.replstate == REDIS_REPL_CONNECT) {
+    if (server.repl_state == REDIS_REPL_CONNECT) {
         redisLog(REDIS_NOTICE,"Connecting to MASTER...");
         if (connectWithMaster() == REDIS_OK) {
             redisLog(REDIS_NOTICE,"MASTER <-> SLAVE sync started");

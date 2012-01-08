@@ -1,6 +1,7 @@
 #include "redis.h"
 #include "t_ts.h" /* timeseries stuff */
 #include <math.h>
+#include <ctype.h>
 
 robj *createObject(int type, void *ptr) {
     robj *o = zmalloc(sizeof(*o));
@@ -43,6 +44,21 @@ robj *createStringObjectFromLongLong(long long value) {
         }
     }
     return o;
+}
+
+/* Note: this function is defined into object.c since here it is where it
+ * belongs but it is actually designed to be used just for INCRBYFLOAT */
+robj *createStringObjectFromLongDouble(long double value) {
+    char buf[256];
+    int len;
+
+    /* We use 17 digits precision since with 128 bit floats that precision
+     * after rouding is able to represent most small decimal numbers in a way
+     * that is "non surprising" for the user (that is, most small decimal
+     * numbers will be represented in a way that when converted back into
+     * a string are exactly the same as what the user typed.) */
+    len = snprintf(buf,sizeof(buf),"%.17Lg", value);
+    return createStringObject(buf,len);
 }
 
 robj *dupStringObject(robj *o) {
@@ -357,15 +373,17 @@ int getDoubleFromObject(robj *o, double *target) {
     } else {
         redisAssertWithInfo(NULL,o,o->type == REDIS_STRING);
         if (o->encoding == REDIS_ENCODING_RAW) {
+            errno = 0;
             value = strtod(o->ptr, &eptr);
-            if (eptr[0] != '\0' || isnan(value)) return REDIS_ERR;
+            if (isspace(((char*)o->ptr)[0]) || eptr[0] != '\0' ||
+                errno == ERANGE || isnan(value))
+                return REDIS_ERR;
         } else if (o->encoding == REDIS_ENCODING_INT) {
             value = (long)o->ptr;
         } else {
             redisPanic("Unknown string encoding");
         }
     }
-
     *target = value;
     return REDIS_OK;
 }
@@ -376,11 +394,48 @@ int getDoubleFromObjectOrReply(redisClient *c, robj *o, double *target, const ch
         if (msg != NULL) {
             addReplyError(c,(char*)msg);
         } else {
-            addReplyError(c,"value is not a double");
+            addReplyError(c,"value is not a valid float");
         }
         return REDIS_ERR;
     }
+    *target = value;
+    return REDIS_OK;
+}
 
+int getLongDoubleFromObject(robj *o, long double *target) {
+    long double value;
+    char *eptr;
+
+    if (o == NULL) {
+        value = 0;
+    } else {
+        redisAssertWithInfo(NULL,o,o->type == REDIS_STRING);
+        if (o->encoding == REDIS_ENCODING_RAW) {
+            errno = 0;
+            value = strtold(o->ptr, &eptr);
+            if (isspace(((char*)o->ptr)[0]) || eptr[0] != '\0' ||
+                errno == ERANGE || isnan(value))
+                return REDIS_ERR;
+        } else if (o->encoding == REDIS_ENCODING_INT) {
+            value = (long)o->ptr;
+        } else {
+            redisPanic("Unknown string encoding");
+        }
+    }
+    *target = value;
+    return REDIS_OK;
+}
+
+int getLongDoubleFromObjectOrReply(redisClient *c, robj *o, long double *target, const char *msg) {
+    long double value;
+    if (getLongDoubleFromObject(o, &value) != REDIS_OK) {
+        if (msg != NULL) {
+            addReplyError(c,(char*)msg);
+        } else {
+            addReplyError(c,"value is not a valid float");
+        }
+        return REDIS_ERR;
+    }
     *target = value;
     return REDIS_OK;
 }
@@ -394,9 +449,10 @@ int getLongLongFromObject(robj *o, long long *target) {
     } else {
         redisAssertWithInfo(NULL,o,o->type == REDIS_STRING);
         if (o->encoding == REDIS_ENCODING_RAW) {
+            errno = 0;
             value = strtoll(o->ptr, &eptr, 10);
-            if (eptr[0] != '\0') return REDIS_ERR;
-            if (errno == ERANGE && (value == LLONG_MIN || value == LLONG_MAX))
+            if (isspace(((char*)o->ptr)[0]) || eptr[0] != '\0' ||
+                errno == ERANGE)
                 return REDIS_ERR;
         } else if (o->encoding == REDIS_ENCODING_INT) {
             value = (long)o->ptr;
@@ -404,7 +460,6 @@ int getLongLongFromObject(robj *o, long long *target) {
             redisPanic("Unknown string encoding");
         }
     }
-
     if (target) *target = value;
     return REDIS_OK;
 }
@@ -419,7 +474,6 @@ int getLongLongFromObjectOrReply(redisClient *c, robj *o, long long *target, con
         }
         return REDIS_ERR;
     }
-
     *target = value;
     return REDIS_OK;
 }
@@ -436,7 +490,6 @@ int getLongFromObjectOrReply(redisClient *c, robj *o, long *target, const char *
         }
         return REDIS_ERR;
     }
-
     *target = value;
     return REDIS_OK;
 }
@@ -472,7 +525,7 @@ robj *objectCommandLookup(redisClient *c, robj *key) {
     dictEntry *de;
 
     if ((de = dictFind(c->db->dict,key->ptr)) == NULL) return NULL;
-    return (robj*) dictGetEntryVal(de);
+    return (robj*) dictGetVal(de);
 }
 
 robj *objectCommandLookupOrReply(redisClient *c, robj *key, robj *reply) {

@@ -57,7 +57,7 @@ void discardCommand(redisClient *c) {
 
     freeClientMultiState(c);
     initClientMultiState(c);
-    c->flags &= (~REDIS_MULTI);
+    c->flags &= ~(REDIS_MULTI|REDIS_DIRTY_CAS);;
     unwatchAllKeys(c);
     addReply(c,shared.ok);
 }
@@ -67,7 +67,7 @@ void discardCommand(redisClient *c) {
 void execCommandReplicateMulti(redisClient *c) {
     robj *multistring = createStringObject("MULTI",5);
 
-    if (server.appendonly)
+    if (server.aof_state != REDIS_AOF_OFF)
         feedAppendOnlyFile(server.multiCommand,c->db->id,&multistring,1);
     if (listLength(server.slaves))
         replicationFeedSlaves(server.slaves,c->db->id,&multistring,1);

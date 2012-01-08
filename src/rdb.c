@@ -37,6 +37,17 @@ time_t rdbLoadTime(rio *rdb) {
     return (time_t)t32;
 }
 
+int rdbSaveMillisecondTime(rio *rdb, long long t) {
+    int64_t t64 = (int64_t) t;
+    return rdbWriteRaw(rdb,&t64,8);
+}
+
+long long rdbLoadMillisecondTime(rio *rdb) {
+    int64_t t64;
+    if (rioRead(rdb,&t64,8) == 0) return -1;
+    return (long long)t64;
+}
+
 /* Saves an encoded length. The first two bits in the first byte are used to
  * hold the encoding type. See the REDIS_RDB_* definitions for more information
  * on the types of encoding. */
@@ -243,7 +254,7 @@ int rdbSaveRawString(rio *rdb, unsigned char *s, size_t len) {
 
     /* Try LZF compression - under 20 bytes it's unable to compress even
      * aaaaaaaaaaaaaaaaaa so skip it */
-    if (server.rdbcompression && len > 20) {
+    if (server.rdb_compression && len > 20) {
         n = rdbSaveLzfStringObject(rdb,s,len);
         if (n == -1) return -1;
         if (n > 0) return n;
@@ -479,7 +490,7 @@ int rdbSaveObject(rio *rdb, robj *o) {
             nwritten += n;
 
             while((de = dictNext(di)) != NULL) {
-                robj *eleobj = dictGetEntryKey(de);
+                robj *eleobj = dictGetKey(de);
                 if ((n = rdbSaveStringObject(rdb,eleobj)) == -1) return -1;
                 nwritten += n;
             }
@@ -508,8 +519,8 @@ int rdbSaveObject(rio *rdb, robj *o) {
             nwritten += n;
 
             while((de = dictNext(di)) != NULL) {
-                robj *eleobj = dictGetEntryKey(de);
-                double *score = dictGetEntryVal(de);
+                robj *eleobj = dictGetKey(de);
+                double *score = dictGetVal(de);
 
                 if ((n = rdbSaveStringObject(rdb,eleobj)) == -1) return -1;
                 nwritten += n;
@@ -535,8 +546,8 @@ int rdbSaveObject(rio *rdb, robj *o) {
             nwritten += n;
 
             while((de = dictNext(di)) != NULL) {
-                robj *key = dictGetEntryKey(de);
-                robj *val = dictGetEntryVal(de);
+                robj *key = dictGetKey(de);
+                robj *val = dictGetVal(de);
 
                 if ((n = rdbSaveStringObject(rdb,key)) == -1) return -1;
                 nwritten += n;
@@ -583,14 +594,14 @@ off_t rdbSavedObjectLen(robj *o) {
  * On success if the key was actaully saved 1 is returned, otherwise 0
  * is returned (the key was already expired). */
 int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val,
-                        time_t expiretime, time_t now)
+                        long long expiretime, long long now)
 {
     /* Save the expire time */
     if (expiretime != -1) {
         /* If this key is already expired skip it */
         if (expiretime < now) return 0;
-        if (rdbSaveType(rdb,REDIS_RDB_OPCODE_EXPIRETIME) == -1) return -1;
-        if (rdbSaveTime(rdb,expiretime) == -1) return -1;
+        if (rdbSaveType(rdb,REDIS_RDB_OPCODE_EXPIRETIME_MS) == -1) return -1;
+        if (rdbSaveMillisecondTime(rdb,expiretime) == -1) return -1;
     }
 
     /* Save type, key, value */
@@ -606,7 +617,7 @@ int rdbSave(char *filename) {
     dictEntry *de;
     char tmpfile[256];
     int j;
-    time_t now = time(NULL);
+    long long now = mstime();
     FILE *fp;
     rio rdb;
 
@@ -619,7 +630,7 @@ int rdbSave(char *filename) {
     }
 
     rioInitWithFile(&rdb,fp);
-    if (rdbWriteRaw(&rdb,"REDIS0002",9) == -1) goto werr;
+    if (rdbWriteRaw(&rdb,"REDIS0003",9) == -1) goto werr;
 
     for (j = 0; j < server.dbnum; j++) {
         redisDb *db = server.db+j;
@@ -637,9 +648,9 @@ int rdbSave(char *filename) {
 
         /* Iterate this DB writing every entry */
         while((de = dictNext(di)) != NULL) {
-            sds keystr = dictGetEntryKey(de);
-            robj key, *o = dictGetEntryVal(de);
-            time_t expire;
+            sds keystr = dictGetKey(de);
+            robj key, *o = dictGetVal(de);
+            long long expire;
             
             initStaticStringObject(key,keystr);
             expire = getExpire(db,&key);
@@ -679,7 +690,7 @@ int rdbSaveBackground(char *filename) {
     pid_t childpid;
     long long start;
 
-    if (server.bgsavechildpid != -1) return REDIS_ERR;
+    if (server.rdb_child_pid != -1) return REDIS_ERR;
 
     server.dirty_before_bgsave = server.dirty;
 
@@ -701,7 +712,7 @@ int rdbSaveBackground(char *filename) {
             return REDIS_ERR;
         }
         redisLog(REDIS_NOTICE,"Background saving started by pid %d",childpid);
-        server.bgsavechildpid = childpid;
+        server.rdb_child_pid = childpid;
         updateDictResizePolicy();
         return REDIS_OK;
     }
@@ -975,7 +986,7 @@ int rdbLoad(char *filename) {
     int type, rdbver;
     redisDb *db = server.db+0;
     char buf[1024];
-    time_t expiretime, now = time(NULL);
+    long long expiretime, now = mstime();
     long loops = 0;
     FILE *fp;
     rio rdb;
@@ -995,7 +1006,7 @@ int rdbLoad(char *filename) {
         return REDIS_ERR;
     }
     rdbver = atoi(buf+5);
-    if (rdbver < 1 || rdbver > 2) {
+    if (rdbver < 1 || rdbver > 3) {
         fclose(fp);
         redisLog(REDIS_WARNING,"Can't handle RDB format version %d",rdbver);
         errno = EINVAL;
@@ -1017,6 +1028,15 @@ int rdbLoad(char *filename) {
         if ((type = rdbLoadType(&rdb)) == -1) goto eoferr;
         if (type == REDIS_RDB_OPCODE_EXPIRETIME) {
             if ((expiretime = rdbLoadTime(&rdb)) == -1) goto eoferr;
+            /* We read the time so we need to read the object type again. */
+            if ((type = rdbLoadType(&rdb)) == -1) goto eoferr;
+            /* the EXPIRETIME opcode specifies time in seconds, so convert
+             * into milliesconds. */
+            expiretime *= 1000;
+        } else if (type == REDIS_RDB_OPCODE_EXPIRETIME_MS) {
+            /* Milliseconds precision expire times introduced with RDB
+             * version 3. */
+            if ((expiretime = rdbLoadMillisecondTime(&rdb)) == -1) goto eoferr;
             /* We read the time so we need to read the object type again. */
             if ((type = rdbLoadType(&rdb)) == -1) goto eoferr;
         }
@@ -1075,20 +1095,20 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
     } else {
         redisLog(REDIS_WARNING,
             "Background saving terminated by signal %d", bysignal);
-        rdbRemoveTempFile(server.bgsavechildpid);
+        rdbRemoveTempFile(server.rdb_child_pid);
     }
-    server.bgsavechildpid = -1;
+    server.rdb_child_pid = -1;
     /* Possibly there are slaves waiting for a BGSAVE in order to be served
      * (the first stage of SYNC is a bulk transfer of dump.rdb) */
     updateSlavesWaitingBgsave(exitcode == 0 ? REDIS_OK : REDIS_ERR);
 }
 
 void saveCommand(redisClient *c) {
-    if (server.bgsavechildpid != -1) {
+    if (server.rdb_child_pid != -1) {
         addReplyError(c,"Background save already in progress");
         return;
     }
-    if (rdbSave(server.dbfilename) == REDIS_OK) {
+    if (rdbSave(server.rdb_filename) == REDIS_OK) {
         addReply(c,shared.ok);
     } else {
         addReply(c,shared.err);
@@ -1096,11 +1116,11 @@ void saveCommand(redisClient *c) {
 }
 
 void bgsaveCommand(redisClient *c) {
-    if (server.bgsavechildpid != -1) {
+    if (server.rdb_child_pid != -1) {
         addReplyError(c,"Background save already in progress");
-    } else if (server.bgrewritechildpid != -1) {
+    } else if (server.aof_child_pid != -1) {
         addReplyError(c,"Can't BGSAVE while AOF log rewriting is in progress");
-    } else if (rdbSaveBackground(server.dbfilename) == REDIS_OK) {
+    } else if (rdbSaveBackground(server.rdb_filename) == REDIS_OK) {
         addReplyStatus(c,"Background saving started");
     } else {
         addReply(c,shared.err);

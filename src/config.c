@@ -23,39 +23,25 @@ void resetServerSaveParams() {
     server.saveparamslen = 0;
 }
 
-/* I agree, this is a very rudimental way to load a configuration...
-   will improve later if the config gets more complex */
-void loadServerConfig(char *filename) {
-    FILE *fp;
-    char buf[REDIS_CONFIGLINE_MAX+1], *err = NULL;
-    int linenum = 0;
-    sds line = NULL;
+void loadServerConfigFromString(char *config) {
+    char *err = NULL;
+    int linenum = 0, totlines, i;
+    sds *lines;
 
-    if (filename[0] == '-' && filename[1] == '\0')
-        fp = stdin;
-    else {
-        if ((fp = fopen(filename,"r")) == NULL) {
-            redisLog(REDIS_WARNING, "Fatal error, can't open config file '%s'", filename);
-            exit(1);
-        }
-    }
+    lines = sdssplitlen(config,strlen(config),"\n",1,&totlines);
 
-    while(fgets(buf,REDIS_CONFIGLINE_MAX+1,fp) != NULL) {
+    for (i = 0; i < totlines; i++) {
         sds *argv;
-        int argc, j;
+        int argc;
 
-        linenum++;
-        line = sdsnew(buf);
-        line = sdstrim(line," \t\r\n");
+        linenum = i+1;
+        lines[i] = sdstrim(lines[i]," \t\r\n");
 
         /* Skip comments and blank lines*/
-        if (line[0] == '#' || line[0] == '\0') {
-            sdsfree(line);
-            continue;
-        }
+        if (lines[i][0] == '#' || lines[i][0] == '\0') continue;
 
         /* Split into arguments */
-        argv = sdssplitargs(line,&argc);
+        argv = sdssplitargs(lines[i],&argc);
         sdstolower(argv[0]);
 
         /* Execute config directives */
@@ -162,7 +148,7 @@ void loadServerConfig(char *filename) {
                 err = "Invalid number of databases"; goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"include") && argc == 2) {
-            loadServerConfig(argv[1]);
+            loadServerConfig(argv[1],NULL);
         } else if (!strcasecmp(argv[0],"maxclients") && argc == 2) {
             server.maxclients = atoi(argv[1]);
         } else if (!strcasecmp(argv[0],"maxmemory") && argc == 2) {
@@ -193,7 +179,7 @@ void loadServerConfig(char *filename) {
         } else if (!strcasecmp(argv[0],"slaveof") && argc == 3) {
             server.masterhost = sdsnew(argv[1]);
             server.masterport = atoi(argv[2]);
-            server.replstate = REDIS_REPL_CONNECT;
+            server.repl_state = REDIS_REPL_CONNECT;
         } else if (!strcasecmp(argv[0],"repl-ping-slave-period") && argc == 2) {
             server.repl_ping_slave_period = atoi(argv[1]);
             if (server.repl_ping_slave_period <= 0) {
@@ -215,7 +201,7 @@ void loadServerConfig(char *filename) {
         } else if (!strcasecmp(argv[0],"glueoutputbuf")) {
             redisLog(REDIS_WARNING, "Deprecated configuration directive: \"%s\"", argv[0]);
         } else if (!strcasecmp(argv[0],"rdbcompression") && argc == 2) {
-            if ((server.rdbcompression = yesnotoi(argv[1])) == -1) {
+            if ((server.rdb_compression = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"activerehashing") && argc == 2) {
@@ -227,24 +213,27 @@ void loadServerConfig(char *filename) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"appendonly") && argc == 2) {
-            if ((server.appendonly = yesnotoi(argv[1])) == -1) {
+            int yes;
+
+            if ((yes = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
+            server.aof_state = yes ? REDIS_AOF_ON : REDIS_AOF_OFF;
         } else if (!strcasecmp(argv[0],"appendfilename") && argc == 2) {
-            zfree(server.appendfilename);
-            server.appendfilename = zstrdup(argv[1]);
+            zfree(server.aof_filename);
+            server.aof_filename = zstrdup(argv[1]);
         } else if (!strcasecmp(argv[0],"no-appendfsync-on-rewrite")
                    && argc == 2) {
-            if ((server.no_appendfsync_on_rewrite= yesnotoi(argv[1])) == -1) {
+            if ((server.aof_no_fsync_on_rewrite= yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"appendfsync") && argc == 2) {
             if (!strcasecmp(argv[1],"no")) {
-                server.appendfsync = APPENDFSYNC_NO;
+                server.aof_fsync = AOF_FSYNC_NO;
             } else if (!strcasecmp(argv[1],"always")) {
-                server.appendfsync = APPENDFSYNC_ALWAYS;
+                server.aof_fsync = AOF_FSYNC_ALWAYS;
             } else if (!strcasecmp(argv[1],"everysec")) {
-                server.appendfsync = APPENDFSYNC_EVERYSEC;
+                server.aof_fsync = AOF_FSYNC_EVERYSEC;
             } else {
                 err = "argument must be 'no', 'always' or 'everysec'";
                 goto loaderr;
@@ -252,23 +241,23 @@ void loadServerConfig(char *filename) {
         } else if (!strcasecmp(argv[0],"auto-aof-rewrite-percentage") &&
                    argc == 2)
         {
-            server.auto_aofrewrite_perc = atoi(argv[1]);
-            if (server.auto_aofrewrite_perc < 0) {
+            server.aof_rewrite_perc = atoi(argv[1]);
+            if (server.aof_rewrite_perc < 0) {
                 err = "Invalid negative percentage for AOF auto rewrite";
                 goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"auto-aof-rewrite-min-size") &&
                    argc == 2)
         {
-            server.auto_aofrewrite_min_size = memtoll(argv[1],NULL);
+            server.aof_rewrite_min_size = memtoll(argv[1],NULL);
         } else if (!strcasecmp(argv[0],"requirepass") && argc == 2) {
             server.requirepass = zstrdup(argv[1]);
         } else if (!strcasecmp(argv[0],"pidfile") && argc == 2) {
             zfree(server.pidfile);
             server.pidfile = zstrdup(argv[1]);
         } else if (!strcasecmp(argv[0],"dbfilename") && argc == 2) {
-            zfree(server.dbfilename);
-            server.dbfilename = zstrdup(argv[1]);
+            zfree(server.rdb_filename);
+            server.rdb_filename = zstrdup(argv[1]);
         } else if (!strcasecmp(argv[0],"hash-max-zipmap-entries") && argc == 2) {
             server.hash_max_zipmap_entries = memtoll(argv[1], NULL);
         } else if (!strcasecmp(argv[0],"hash-max-zipmap-value") && argc == 2) {
@@ -325,20 +314,54 @@ void loadServerConfig(char *filename) {
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
-        for (j = 0; j < argc; j++)
-            sdsfree(argv[j]);
-        zfree(argv);
-        sdsfree(line);
+        sdsfreesplitres(argv,argc);
     }
-    if (fp != stdin) fclose(fp);
+    sdsfreesplitres(lines,totlines);
     return;
 
 loaderr:
     fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR ***\n");
     fprintf(stderr, "Reading the configuration file, at line %d\n", linenum);
-    fprintf(stderr, ">>> '%s'\n", line);
+    fprintf(stderr, ">>> '%s'\n", lines[i]);
     fprintf(stderr, "%s\n", err);
     exit(1);
+}
+
+/* Load the server configuration from the specified filename.
+ * The function appends the additional configuration directives stored
+ * in the 'options' string to the config file before loading.
+ *
+ * Both filename and options can be NULL, in such a case are considered
+ * emtpy. This way loadServerConfig can be used to just load a file or
+ * just load a string. */
+void loadServerConfig(char *filename, char *options) {
+    sds config = sdsempty();
+    char buf[REDIS_CONFIGLINE_MAX+1];
+
+    /* Load the file content */
+    if (filename) {
+        FILE *fp;
+
+        if (filename[0] == '-' && filename[1] == '\0') {
+            fp = stdin;
+        } else {
+            if ((fp = fopen(filename,"r")) == NULL) {
+                redisLog(REDIS_WARNING,
+                    "Fatal error, can't open config file '%s'", filename);
+                exit(1);
+            }
+        }
+        while(fgets(buf,REDIS_CONFIGLINE_MAX+1,fp) != NULL)
+            config = sdscat(config,buf);
+        if (fp != stdin) fclose(fp);
+    }
+    /* Append the additional options */
+    if (options) {
+        config = sdscat(config,"\n");
+        config = sdscat(config,options);
+    }
+    loadServerConfigFromString(config);
+    sdsfree(config);
 }
 
 /*-----------------------------------------------------------------------------
@@ -353,8 +376,8 @@ void configSetCommand(redisClient *c) {
     o = c->argv[3];
 
     if (!strcasecmp(c->argv[2]->ptr,"dbfilename")) {
-        zfree(server.dbfilename);
-        server.dbfilename = zstrdup(o->ptr);
+        zfree(server.rdb_filename);
+        server.rdb_filename = zstrdup(o->ptr);
     } else if (!strcasecmp(c->argv[2]->ptr,"requirepass")) {
         zfree(server.requirepass);
         server.requirepass = ((char*)o->ptr)[0] ? zstrdup(o->ptr) : NULL;
@@ -392,11 +415,11 @@ void configSetCommand(redisClient *c) {
         server.maxidletime = ll;
     } else if (!strcasecmp(c->argv[2]->ptr,"appendfsync")) {
         if (!strcasecmp(o->ptr,"no")) {
-            server.appendfsync = APPENDFSYNC_NO;
+            server.aof_fsync = AOF_FSYNC_NO;
         } else if (!strcasecmp(o->ptr,"everysec")) {
-            server.appendfsync = APPENDFSYNC_EVERYSEC;
+            server.aof_fsync = AOF_FSYNC_EVERYSEC;
         } else if (!strcasecmp(o->ptr,"always")) {
-            server.appendfsync = APPENDFSYNC_ALWAYS;
+            server.aof_fsync = AOF_FSYNC_ALWAYS;
         } else {
             goto badfmt;
         }
@@ -404,29 +427,26 @@ void configSetCommand(redisClient *c) {
         int yn = yesnotoi(o->ptr);
 
         if (yn == -1) goto badfmt;
-        server.no_appendfsync_on_rewrite = yn;
+        server.aof_no_fsync_on_rewrite = yn;
     } else if (!strcasecmp(c->argv[2]->ptr,"appendonly")) {
-        int old = server.appendonly;
-        int new = yesnotoi(o->ptr);
+        int enable = yesnotoi(o->ptr);
 
-        if (new == -1) goto badfmt;
-        if (old != new) {
-            if (new == 0) {
-                stopAppendOnly();
-            } else {
-                if (startAppendOnly() == REDIS_ERR) {
-                    addReplyError(c,
-                        "Unable to turn on AOF. Check server logs.");
-                    return;
-                }
+        if (enable == -1) goto badfmt;
+        if (enable == 0 && server.aof_state != REDIS_AOF_OFF) {
+            stopAppendOnly();
+        } else if (enable && server.aof_state == REDIS_AOF_OFF) {
+            if (startAppendOnly() == REDIS_ERR) {
+                addReplyError(c,
+                    "Unable to turn on AOF. Check server logs.");
+                return;
             }
         }
     } else if (!strcasecmp(c->argv[2]->ptr,"auto-aof-rewrite-percentage")) {
         if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
-        server.auto_aofrewrite_perc = ll;
+        server.aof_rewrite_perc = ll;
     } else if (!strcasecmp(c->argv[2]->ptr,"auto-aof-rewrite-min-size")) {
         if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
-        server.auto_aofrewrite_min_size = ll;
+        server.aof_rewrite_min_size = ll;
     } else if (!strcasecmp(c->argv[2]->ptr,"save")) {
         int vlen, j;
         sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
@@ -547,7 +567,7 @@ void configGetCommand(redisClient *c) {
     }
     if (stringmatch(pattern,"dbfilename",0)) {
         addReplyBulkCString(c,"dbfilename");
-        addReplyBulkCString(c,server.dbfilename);
+        addReplyBulkCString(c,server.rdb_filename);
         matches++;
     }
     if (stringmatch(pattern,"requirepass",0)) {
@@ -596,21 +616,21 @@ void configGetCommand(redisClient *c) {
     }
     if (stringmatch(pattern,"appendonly",0)) {
         addReplyBulkCString(c,"appendonly");
-        addReplyBulkCString(c,server.appendonly ? "yes" : "no");
+        addReplyBulkCString(c,server.aof_state == REDIS_AOF_OFF ? "no" : "yes");
         matches++;
     }
     if (stringmatch(pattern,"no-appendfsync-on-rewrite",0)) {
         addReplyBulkCString(c,"no-appendfsync-on-rewrite");
-        addReplyBulkCString(c,server.no_appendfsync_on_rewrite ? "yes" : "no");
+        addReplyBulkCString(c,server.aof_no_fsync_on_rewrite ? "yes" : "no");
         matches++;
     }
     if (stringmatch(pattern,"appendfsync",0)) {
         char *policy;
 
-        switch(server.appendfsync) {
-        case APPENDFSYNC_NO: policy = "no"; break;
-        case APPENDFSYNC_EVERYSEC: policy = "everysec"; break;
-        case APPENDFSYNC_ALWAYS: policy = "always"; break;
+        switch(server.aof_fsync) {
+        case AOF_FSYNC_NO: policy = "no"; break;
+        case AOF_FSYNC_EVERYSEC: policy = "everysec"; break;
+        case AOF_FSYNC_ALWAYS: policy = "always"; break;
         default: policy = "unknown"; break; /* too harmless to panic */
         }
         addReplyBulkCString(c,"appendfsync");
@@ -635,12 +655,12 @@ void configGetCommand(redisClient *c) {
     }
     if (stringmatch(pattern,"auto-aof-rewrite-percentage",0)) {
         addReplyBulkCString(c,"auto-aof-rewrite-percentage");
-        addReplyBulkLongLong(c,server.auto_aofrewrite_perc);
+        addReplyBulkLongLong(c,server.aof_rewrite_perc);
         matches++;
     }
     if (stringmatch(pattern,"auto-aof-rewrite-min-size",0)) {
         addReplyBulkCString(c,"auto-aof-rewrite-min-size");
-        addReplyBulkLongLong(c,server.auto_aofrewrite_min_size);
+        addReplyBulkLongLong(c,server.aof_rewrite_min_size);
         matches++;
     }
     if (stringmatch(pattern,"slave-serve-stale-data",0)) {

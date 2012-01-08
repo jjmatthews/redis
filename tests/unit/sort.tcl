@@ -50,6 +50,10 @@ start_server {
             assert_equal $result [r sort tosort BY weight_*]
         }
 
+        test "$title: SORT BY key with limit" {
+            assert_equal [lrange $result 5 9] [r sort tosort BY weight_* LIMIT 5 5]
+        }
+
         test "$title: SORT BY hash field" {
             assert_equal $result [r sort tosort BY wobj_*->weight]
         }
@@ -133,6 +137,18 @@ start_server {
         }
         assert_equal [lsort -real $floats] [r sort mylist]
     }
+
+    test "SORT with STORE returns zero if result is empty (github isse 224)" {
+        r flushdb
+        r sort foo store bar
+    } {0}
+
+    test "SORT with STORE does not create empty lists (github issue 224)" {
+        r flushdb
+        r lpush foo bar
+        r sort foo limit 10 10 store zap
+        r exists zap
+    } {0}
 
     tags {"slow"} {
         set num 100

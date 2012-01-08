@@ -22,6 +22,11 @@ src/redis.conf
 deps/lua/src/lua
 deps/lua/src/luac
 deps/lua/src/liblua.a
+<<<<<<< HEAD
 Debug/*
 *.cproject
 *.project
+=======
+.make-*
+.prerequisites
+>>>>>>> 68fe1b9b99e36b81298ee4d5181d3b7792146d97
