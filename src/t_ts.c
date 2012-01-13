@@ -34,13 +34,18 @@ void tsexistsCommand(redisClient *c) {
 void tsrankCommand(redisClient *c) {
     robj *o;
     double score;
+    unsigned long rank;
 
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,o,REDIS_TS)) return;
 
     if(getDoubleFromObjectOrReply(c,c->argv[2],&score,NULL) != REDIS_OK) return;
 
-    addReply(c, tsTypeRank(o,score) ? shared.cone : shared.czero);
+    rank = tsTypeRank(o,score);
+    if(rank)
+        addReplyLongLong(c, rank-1);
+    else
+        addReply(c, shared.nullbulk);
 }
 
 
@@ -168,16 +173,12 @@ unsigned long tsTypeRank(robj *o, double score) {
     int i;
 
     for (i = ts->level-1; i >= 0; i--) {
-        while (x->level[i].forward && x->level[i].forward->score < score) {
+        while (x->level[i].forward && x->level[i].forward->score <= score) {
             rank += x->level[i].span;
             x = x->level[i].forward;
         }
     }
-    if(x->level[0].forward->score == score) {
-        rank += x->level[0].span;
-        return rank;
-    } else
-        return NULL;
+    return x->score == score ? rank: 0;
 }
 
 

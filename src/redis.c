@@ -250,6 +250,7 @@ struct redisCommand redisCommandTable[] = {
     {"zdiffstore",zdiffstoreCommand,-4,"wm",0,zunionInterGetKeys,0,0,0,0,0},
     {"tslen",tslenCommand,2,"r",0,NULL,1,1,1,0,0},
     {"tsexists",tsexistsCommand,3,"r",0,NULL,1,1,1,0,0},
+    {"tsrank",tsrankCommand,3,"r",0,NULL,1,1,1,0,0},
     {"tsadd",tsaddCommand,-4,"wm",0,NULL,1,1,1,0,0},
     {"tsget",tsgetCommand,3,"r",0,NULL,1,1,1,0,0},
     {"tsrange",tsrangeCommand,-4,"r",0,NULL,1,1,1,0,0},

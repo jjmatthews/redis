@@ -1,8 +1,8 @@
 start_server {tags {"ts"}} {
     proc create_ts {key items} {
         r del $key
-        foreach {score k entry} $items {
-            r tsadd $key $score $k $entry
+        foreach {score entry} $items {
+            r tsadd $key $score $entry
         }
     }
     test {TS basic TSADD and value update} {
@@ -33,6 +33,18 @@ start_server {tags {"ts"}} {
     	assert_equal {} [r tsget ttmp 1.1]
     	assert_equal {} [r tsget ttmp 2.4]
     	assert_equal {} [r tsget ttmp 0]
+    }
+	
+    test "TSRANK" {
+	create_ts ttmp {200 x 10 y 60 z 9 foo 300 bla 1 me}
+	assert_equal 6 [r tslen ttmp]
+	assert_equal 1 [r tsrank ttmp 9]
+	assert_equal 2 [r tsrank ttmp 10]
+	assert_equal 0 [r tsrank ttmp 1]
+	assert_equal 5 [r tsrank ttmp 300]
+	assert_equal "" [r tsrank ttmp 2]
+	assert_equal "" [r tsrank ttmp -200]
+	assert_equal "" [r tsrank ttmp 1200]
     }
 
     test "TSRANGE basics" {
