@@ -11,10 +11,11 @@
 #include "redis.h"
 
 /*
- * 7 TIMESERIES COMMANDS
+ * 8 TIMESERIES COMMANDS
  */
 void tslenCommand(redisClient *c);
 void tsexistsCommand(redisClient *c);
+void tsrankCommand(redisClient *c);
 void tsaddCommand(redisClient *c);
 void tsgetCommand(redisClient *c);
 void tsrangeCommand(redisClient *c);
@@ -34,6 +35,7 @@ void freeTsObject(robj *o);
 robj *createTsObject(void);
 int tsTypeSet(robj *o, double score, robj *value);
 int tsTypeExists(robj *o, double score);
+unsigned long tsTypeRank(robj *o, double time);
 robj *tsTypeGet(robj *o, double score);
 robj *tsTypeLookupWriteOrCreate(redisClient *c, robj *key);
 void tsrangeGenericCommand(redisClient *c, int start, int end, int withtimes, int withvalues, int reverse);

@@ -3,23 +3,6 @@
 #include <math.h>
 
 
-/* Find the first node having a score equal or greater than the specified one.
-* Returns NULL if there is no match. */
-zskiplistNode *zslFirstWithScore(zskiplist *zsl, double score) {
-    zskiplistNode *x;
-    int i;
-
-    x = zsl->header;
-    for (i = zsl->level-1; i >= 0; i--) {
-        while (x->level[i].forward && x->level[i].forward->score < score)
-            x = x->level[i].forward;
-    }
-    /* We may have multiple elements with the same score, what we need
-* is to find the element with both the right score and object. */
-    return x->level[0].forward;
-}
-
-
 /*-----------------------------------------------------------------------------
  * timeseries commands
  *----------------------------------------------------------------------------*/
@@ -46,6 +29,18 @@ void tsexistsCommand(redisClient *c) {
     if(getDoubleFromObjectOrReply(c,c->argv[2],&score,NULL) != REDIS_OK) return;
 
     addReply(c, tsTypeExists(o,score) ? shared.cone : shared.czero);
+}
+
+void tsrankCommand(redisClient *c) {
+    robj *o;
+    double score;
+
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
+        checkType(c,o,REDIS_TS)) return;
+
+    if(getDoubleFromObjectOrReply(c,c->argv[2],&score,NULL) != REDIS_OK) return;
+
+    addReply(c, tsTypeRank(o,score) ? shared.cone : shared.czero);
 }
 
 
@@ -118,6 +113,23 @@ void tscountCommand(redisClient *c) {
  * Internals
  *----------------------------------------------------------------------------*/
 
+/* Find the first node having a score equal or greater than the specified one.
+* Returns NULL if there is no match. */
+zskiplistNode *zslFirstWithScore(zskiplist *zsl, double score) {
+    zskiplistNode *x;
+    int i;
+
+    x = zsl->header;
+    for (i = zsl->level-1; i >= 0; i--) {
+        while (x->level[i].forward && x->level[i].forward->score < score)
+            x = x->level[i].forward;
+    }
+    /* We may have multiple elements with the same score, what we need
+* is to find the element with both the right score and object. */
+    return x->level[0].forward;
+}
+
+
 robj *createTsObject(void) {
     zskiplist *zs = zslCreate();
     return createObject(REDIS_TS,zs);
@@ -145,6 +157,27 @@ int tsTypeExists(robj *o, double time) {
 	zskiplist *ts = o->ptr;
 	zskiplistNode* ln = zslFirstWithScore(ts,time);
 	return ln != NULL && ln->score == time ? 1 : 0;
+}
+
+
+/* Get the rank of a given score(time) */
+unsigned long tsTypeRank(robj *o, double score) {
+    zskiplist *ts = o->ptr;
+    zskiplistNode *x = ts->header;
+    unsigned long rank = 0;
+    int i;
+
+    for (i = ts->level-1; i >= 0; i--) {
+        while (x->level[i].forward && x->level[i].forward->score < score) {
+            rank += x->level[i].span;
+            x = x->level[i].forward;
+        }
+    }
+    if(x->level[0].forward->score == score) {
+        rank += x->level[0].span;
+        return rank;
+    } else
+        return NULL;
 }
 
 
