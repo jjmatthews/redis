@@ -36,7 +36,7 @@ void tsrankCommand(redisClient *c) {
     double score;
     unsigned long rank;
 
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.nullbulk)) == NULL ||
         checkType(c,o,REDIS_TS)) return;
 
     if(getDoubleFromObjectOrReply(c,c->argv[2],&score,NULL) != REDIS_OK) return;

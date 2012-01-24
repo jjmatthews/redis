@@ -24,9 +24,9 @@ start_server {tags {"ts"}} {
     } {0}
 	
     test "TSGET on existing times" {
-	assert_equal {xy} [r tsget ttmp 1]
-	assert_equal {y} [r tsget ttmp 2]
-	assert_equal {z} [r tsget ttmp 3]
+    	assert_equal {xy} [r tsget ttmp 1]
+    	assert_equal {y} [r tsget ttmp 2]
+    	assert_equal {z} [r tsget ttmp 3]
     }
 	
     test "TSGET on missing times" {
@@ -36,18 +36,20 @@ start_server {tags {"ts"}} {
     }
 	
     test "TSRANK" {
-	create_ts ttmp {200 x 10 y 60 z 9 foo 300 bla 1 me}
-	assert_equal 6 [r tslen ttmp]
-	assert_equal 1 [r tsrank ttmp 9]
-	assert_equal 2 [r tsrank ttmp 10]
-	assert_equal 0 [r tsrank ttmp 1]
-	assert_equal 5 [r tsrank ttmp 300]
-	assert_equal "" [r tsrank ttmp 2]
-	assert_equal "" [r tsrank ttmp -200]
-	assert_equal "" [r tsrank ttmp 1200]
+    	create_ts ttmp {200 x 10 y 60 z 9 foo 300 bla 1 me}
+    	assert_equal 6 [r tslen ttmp]
+    	assert_equal 1 [r tsrank ttmp 9]
+    	assert_equal 2 [r tsrank ttmp 10]
+    	assert_equal 0 [r tsrank ttmp 1]
+    	assert_equal 5 [r tsrank ttmp 300]
+    	assert_equal "" [r tsrank ttmp 2]
+    	assert_equal "" [r tsrank ttmp -200]
+    	assert_equal "" [r tsrank ttmp 1200]
+        assert_equal "" [r tsrank ttmpttmp 2]
     }
-
+    
     test "TSRANGE basics" {
+        
         r del ttmp
         r tsadd ttmp 1 a
         r tsadd ttmp 2 b
@@ -73,10 +75,17 @@ start_server {tags {"ts"}} {
         assert_equal {} [r tsrange ttmp 0 -5]
         assert_equal {} [r tsrange ttmp 1 -5]
 
-        # withscores
+        # withtimes
         assert_equal {1 a 2 b 3 a 4 c} [r tsrange ttmp 0 -1 withtimes]
     }
-
+    
+    test "TSRANGE novalues" {
+        create_ts ttmp {200 x 10 y 60 z 9 foo 300 bla 1 me}
+        assert_equal {1 9 10 60 200 300} [r tsrange ttmp 0 -1 novalues]
+        assert_equal {9 10 60 200} [r tsrange ttmp 1 -2 novalues]
+        assert_equal {9 10 60 200} [r tsrange ttmp 1 -2 novalues withtimes]
+    }
+	
     test "TSRANGEBYTIME basics" {
         r del ttmp
         r tsadd ttmp 45 achtung
@@ -94,5 +103,11 @@ start_server {tags {"ts"}} {
 
         # with times
         assert_equal {23 ciao 45 achtung 58 goodbye} [r tsrangebytime ttmp 20 60 withtimes]
+    }
+    
+    test "TSRANGEBYTIME novalues" {
+        create_ts ttmp {200 x 10 y 60 z 9 foo 300 bla 1 me}
+        assert_equal {1 9 10 60 200 300} [r tsrangebytime ttmp 0 1000 novalues]
+        assert_equal {9 10 60 200} [r tsrangebytime ttmp 8 200 novalues]
     }
 }
