@@ -765,6 +765,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * in order to guarantee a strict consistency. */
     if (server.masterhost == NULL) activeExpireCycle();
 
+    /* Close clients that need to be closed asynchronous */
+    freeClientsInAsyncFreeQueue();
+
     /* Replication cron function -- used to reconnect to master and
      * to detect transfer failures. */
     if (!(loops % 10)) replicationCron();
@@ -937,6 +940,17 @@ void initServerConfig() {
     server.repl_serve_stale_data = 1;
     server.repl_down_since = -1;
 
+    /* Client output buffer limits */
+    server.client_obuf_limits[REDIS_CLIENT_LIMIT_CLASS_NORMAL].hard_limit_bytes = 0;
+    server.client_obuf_limits[REDIS_CLIENT_LIMIT_CLASS_NORMAL].soft_limit_bytes = 0;
+    server.client_obuf_limits[REDIS_CLIENT_LIMIT_CLASS_NORMAL].soft_limit_seconds = 0;
+    server.client_obuf_limits[REDIS_CLIENT_LIMIT_CLASS_SLAVE].hard_limit_bytes = 1024*1024*256;
+    server.client_obuf_limits[REDIS_CLIENT_LIMIT_CLASS_SLAVE].soft_limit_bytes = 1024*1024*64;
+    server.client_obuf_limits[REDIS_CLIENT_LIMIT_CLASS_SLAVE].soft_limit_seconds = 60;
+    server.client_obuf_limits[REDIS_CLIENT_LIMIT_CLASS_PUBSUB].hard_limit_bytes = 1024*1024*32;
+    server.client_obuf_limits[REDIS_CLIENT_LIMIT_CLASS_PUBSUB].soft_limit_bytes = 1024*1024*8;
+    server.client_obuf_limits[REDIS_CLIENT_LIMIT_CLASS_PUBSUB].soft_limit_seconds = 60;
+
     /* Double constants initialization */
     R_Zero = 0.0;
     R_PosInf = 1.0/R_Zero;
@@ -1013,6 +1027,7 @@ void initServer() {
 
     server.current_client = NULL;
     server.clients = listCreate();
+    server.clients_to_close = listCreate();
     server.slaves = listCreate();
     server.monitors = listCreate();
     server.unblocked_clients = listCreate();

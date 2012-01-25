@@ -613,7 +613,7 @@ int clusterProcessPacket(clusterLink *link) {
             }
         }
         /* Update our info about the node */
-        link->node->pong_received = time(NULL);
+        if (link->node) link->node->pong_received = time(NULL);
 
         /* Update master/slave info */
         if (sender) {
@@ -804,7 +804,7 @@ void clusterBroadcastMessage(void *buf, size_t len) {
 
 /* Build the message header */
 void clusterBuildMessageHdr(clusterMsg *hdr, int type) {
-    int totlen;
+    int totlen = 0;
 
     memset(hdr,0,sizeof(*hdr));
     hdr->type = htons(type);

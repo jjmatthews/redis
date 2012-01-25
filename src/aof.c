@@ -295,6 +295,8 @@ struct redisClient *createFakeClient(void) {
      * so that Redis will not try to send replies to this client. */
     c->replstate = REDIS_REPL_WAIT_BGSAVE_START;
     c->reply = listCreate();
+    c->reply_bytes = 0;
+    c->obuf_soft_limit_reached_time = 0;
     c->watched_keys = listCreate();
     listSetFreeMethod(c->reply,decrRefCount);
     listSetDupMethod(c->reply,dupClientReplyValue);
@@ -842,7 +844,7 @@ void aofRemoveTempFile(pid_t childpid) {
 /* Update the server.aof_current_size filed explicitly using stat(2)
  * to check the size of the file. This is useful after a rewrite or after
  * a restart, normally the size is updated just adding the write length
- * to the current lenght, that is much faster. */
+ * to the current length, that is much faster. */
 void aofUpdateCurrentSize(void) {
     struct redis_stat sb;
 
