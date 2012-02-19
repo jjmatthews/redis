@@ -43,17 +43,22 @@ robj *lookupKey(redisDb *db, robj *key) {
          * a copy on write madness. */
         if (server.rdb_child_pid == -1 && server.aof_child_pid == -1)
             val->lru = server.lruclock;
-        server.stat_keyspace_hits++;
         return val;
     } else {
-        server.stat_keyspace_misses++;
         return NULL;
     }
 }
 
 robj *lookupKeyRead(redisDb *db, robj *key) {
+    robj *val;
+
     expireIfNeeded(db,key);
-    return lookupKey(db,key);
+    val = lookupKey(db,key);
+    if (val == NULL)
+        server.stat_keyspace_misses++;
+    else
+        server.stat_keyspace_hits++;
+    return val;
 }
 
 robj *lookupKeyWrite(redisDb *db, robj *key) {
@@ -111,7 +116,7 @@ void setKey(redisDb *db, robj *key, robj *val) {
     }
     incrRefCount(val);
     removeExpire(db,key);
-    touchWatchedKey(db,key);
+    signalModifiedKey(db,key);
 }
 
 int dbExists(redisDb *db, robj *key) {
@@ -485,9 +490,10 @@ long long getExpire(redisDb *db, robj *key) {
 void propagateExpire(redisDb *db, robj *key) {
     robj *argv[2];
 
-    argv[0] = createStringObject("DEL",3);
+    argv[0] = shared.del;
     argv[1] = key;
-    incrRefCount(key);
+    incrRefCount(argv[0]);
+    incrRefCount(argv[1]);
 
     if (server.aof_state != REDIS_AOF_OFF)
         feedAppendOnlyFile(server.delCommand,db->id,argv,2);
